@@ -1,5 +1,27 @@
 from collections import Counter
 import numpy as np  
+import nltk
+
+def tokenize(text: str, n: int) -> list:
+    """
+    Tokenize a text for ngram model.
+    This requires padding each sentence with SENTENCE_BEGIN and SENTENCE_END tokens.
+    Args:
+      text (str): a string representing a sequence of sentences
+    """
+    lines = nltk.sent_tokenize(text)
+    sentences = []
+    for line in lines:
+        sentence = []
+        if n > 1:
+            sentence = [SENTENCE_BEGIN] * (n - 1) + nltk.word_tokenize(line) + [SENTENCE_END] * (n - 1)
+        else:
+            sentence = [SENTENCE_BEGIN] + nltk.word_tokenize(line) + [SENTENCE_END]  
+        
+        sentences.append(sentence)
+    
+    return sentences
+
 
 def create_ngrams(tokens: list, n: int) -> list:
     """Creates n-grams for the given token sequence.
@@ -14,6 +36,9 @@ def create_ngrams(tokens: list, n: int) -> list:
     for i in range(len(tokens) - n + 1):
         ngrams.append(tuple(tokens[i : i + n]))
     return ngrams
+
+SENTENCE_BEGIN = "<s>"
+SENTENCE_END = "</s>"
 
 UNKNOWN_THRESHOLD = 2
 
@@ -195,3 +220,4 @@ class NGRAM_Model:
           list: a list containing lists of strings, one per generated sentence
         """
         return [self.generate_sentence() for i in range(n)]
+
