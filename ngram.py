@@ -58,12 +58,13 @@ class NGRAM_Model:
         """
         self.n = n_gram
 
-    def train(self, tokens: list, verbose: bool = False) -> None:
+    def train(self, train_tokens: list, held_out_tokens: list, verbose: bool = False) -> None:
         """Trains the language model on the given data. Assumes that the given data
         has tokens that are white-space separated, has one sentence per line, and
         that the sentences begin with <s> and end with </s>
         Args:
-          tokens (list): tokenized data to be trained on as a single list
+          train_tokens (list): tokenized data to be trained on as a single list
+          held_out_tokens (list): tokenized data to be used for finding linear interpolation weights
           verbose (bool): default value False, to be used to turn on/off debugging prints
         """
         # convert all tokens with counts less than UNKNOWN_THRESHOLD to UNK
@@ -220,4 +221,86 @@ class NGRAM_Model:
           list: a list containing lists of strings, one per generated sentence
         """
         return [self.generate_sentence() for i in range(n)]
+
+class LinearInterpolation:
+    def __init__(self, ngram: int, held_out_tokens: list, method: 'grid_search' or 'EM', sub_divisions: int = 50):
+        self.ngram = ngram
+        ngram_to_freq = {}
+        num_tokens = len(held_out_tokens)
+        self.ngram_to_prob = {}
+        self.ngrams = {}
+        for n in range(1, ngram + 1):
+            curr_ngrams = create_ngrams(held_out_tokens, n)
+            if n == self.ngram:
+                self.ngrams = curr_ngrams
+            ngram_to_freq[n] = Counter(curr_ngrams)
+
+            if n > 1:
+                self.ngram_to_prob[n] = {k: v / ngram_to_freq[n-1][k[-n:][:-1]] for k, v in ngram_to_freq[n].items()}
+            else:
+                self.ngram_to_prob[n] = {k: v / num_tokens for k, v in ngram_to_freq[n].items()}
+            # self.ngram_to_prob[n] = {k: v / self.ngram_to_freq[n-1][k[:-n]] for k, v in self.ngram_to_freq[n].items()}
+
+        # turn ngram_to_prob into matrix where each row is a sample from self.ngrams and each column is a probability of col+1 gram occuring given the previous col grams
+        self.X = np.zeros((len(self.ngrams), self.ngram))
+        for i, ngram in enumerate(self.ngrams):
+            for j in range(self.ngram):
+                self.X[i, j] = self.ngram_to_prob[j+1][ngram[-(j+1):]]
+        
+        self.method = method
+        self.sub_divisions = sub_divisions
+        self.weights = None
+        
+    def train(self):
+        if self.weights is not None:
+            pass
+        if self.method == 'grid_search':
+            self.grid_search(self.sub_divisions)
+        elif self.method == 'EM':
+            raise NotImplementedError()
+        else:
+            raise ValueError(f'Unknown method {self.method}')
+
+        
+    def grid_search(self, sub_divisions: int):
+        weights = np.ones(self.ngram) / self.ngram
+        best_mle = -float('inf')
+        # try self.ngram - 1 weights for each weight
+        lambdas_combinations = self._generate_possible_lambda_combinations(self.ngram, sub_divisions)
+        # choose self.ngram weights that sum to 1 needs to work for ngrams > 3
+        for lambdas in lambdas_combinations:
+            mle = self._log_likelihood(lambdas)
+            if mle > best_mle:
+                best_mle = mle
+                best_weights = lambdas
+        
+        self.weights = best_weights
+        return best_weights
+    
+    def draw_samples(self):
+        # draw samples from self.ngrams
+        pass
+
+    def _log_likelihood(self, lambdas):
+        # want np.log to ignore 0s
+        product = self.X * lambdas
+        non_zero_mask = product != 0
+        log_product = np.zeros(product.shape)
+        log_product[non_zero_mask] = np.log(product[non_zero_mask])
+
+        return -np.sum(log_product)
+    
+    def _generate_possible_lambda_combinations(self, dimensions: int, sub_divisions: int):
+        # generating points along a simplex whos vertices are (0, 0, ..., 1), (0, 0, ..., 1), ..., (1, 0, ..., 0)
+        def recursive_generation(current_points, remaining, depth):
+            if depth == dimensions - 1:
+                yield current_points + [remaining]
+            else:
+                for i in range(sub_divisions - sum(current_points)):
+                    yield from recursive_generation(current_points + [i], remaining - i, depth + 1)
+        
+        scale = 1 / sub_divisions
+        return list(map(lambda x: list(map(lambda y: y * scale, x)), recursive_generation([], sub_divisions, 0)))
+
+
 
