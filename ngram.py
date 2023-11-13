@@ -1,6 +1,7 @@
 from collections import Counter
 import numpy as np  
 import nltk
+from typing_extensions import Literal
 
 def tokenize(text: str, n: int) -> list:
     """
@@ -223,12 +224,13 @@ class NGRAM_Model:
         return [self.generate_sentence() for i in range(n)]
 
 class LinearInterpolation:
-    def __init__(self, ngram: int, held_out_tokens: list, method: 'grid_search' or 'EM', sub_divisions: int = 50):
+    def __init__(self, ngram: int, held_out_tokens: list, method: Literal['grid_search', 'expectation_maximization'], sub_divisions: int = 50):
         self.ngram = ngram
         ngram_to_freq = {}
         num_tokens = len(held_out_tokens)
         self.ngram_to_prob = {}
         self.ngrams = {}
+    
         for n in range(1, ngram + 1):
             curr_ngrams = create_ngrams(held_out_tokens, n)
             if n == self.ngram:
@@ -239,7 +241,6 @@ class LinearInterpolation:
                 self.ngram_to_prob[n] = {k: v / ngram_to_freq[n-1][k[-n:][:-1]] for k, v in ngram_to_freq[n].items()}
             else:
                 self.ngram_to_prob[n] = {k: v / num_tokens for k, v in ngram_to_freq[n].items()}
-            # self.ngram_to_prob[n] = {k: v / self.ngram_to_freq[n-1][k[:-n]] for k, v in self.ngram_to_freq[n].items()}
 
         # turn ngram_to_prob into matrix where each row is a sample from self.ngrams and each column is a probability of col+1 gram occuring given the previous col grams
         self.X = np.zeros((len(self.ngrams), self.ngram))
@@ -256,8 +257,8 @@ class LinearInterpolation:
             pass
         if self.method == 'grid_search':
             self.grid_search(self.sub_divisions)
-        elif self.method == 'EM':
-            raise NotImplementedError()
+        elif self.method == 'expectation_maximization':
+            self.expectation_maximization()
         else:
             raise ValueError(f'Unknown method {self.method}')
 
@@ -279,7 +280,35 @@ class LinearInterpolation:
     
     def draw_samples(self):
         # draw samples from self.ngrams
-        pass
+        # create self.ngram plots side by side of the distribution of each ngram
+        fig, axs = plt.subplots(1, self.ngram, figsize=(10, 10))
+        for i in range(self.ngram):
+            axs[i].hist(self.X[:, i], bins=50)
+            axs[i].set_title(f'Ngram {i+1}')
+        plt.show()
+    
+
+    def expectation_maximization(self):
+        # initialize weights to be uniform
+        weights = np.ones(self.ngram) / self.ngram
+        # iterate until convergence
+        while True:
+            expectations = self._e_step(weights)
+            new_weights = self._m_step(expectations)
+            if np.allclose(weights, new_weights):
+                break
+            weights = new_weights
+        self.weights = weights
+
+    def _e_step(self, weights):
+        # TODO: Shouldn't this use MLE? Right now we are determining how weighted ngram probs individually contribute to overal sum of weighted ngram probs
+        # But do we also need to add some non-linearities to the weights? e.g. MLE?
+        gram_weight_prods = self.X * weights 
+        gram_impacts_per_sample = gram_weight_prods / np.sum(gram_weight_prods, axis=1).reshape(-1, 1)
+        return gram_impacts_per_sample.sum(axis=0)
+
+    def _m_step(self, expectations):
+        return expectations / np.sum(expectations)
 
     def _log_likelihood(self, lambdas):
         # want np.log to ignore 0s
@@ -301,6 +330,5 @@ class LinearInterpolation:
         
         scale = 1 / sub_divisions
         return list(map(lambda x: list(map(lambda y: y * scale, x)), recursive_generation([], sub_divisions, 0)))
-
-
-
+    
+    
