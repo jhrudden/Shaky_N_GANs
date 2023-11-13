@@ -2,6 +2,7 @@ from collections import Counter
 import numpy as np  
 import nltk
 from typing_extensions import Literal
+import matplotlib.pyplot as plt
 
 def tokenize(text: str, n: int) -> list:
     """
