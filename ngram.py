@@ -4,6 +4,12 @@ import nltk
 from typing_extensions import Literal
 import matplotlib.pyplot as plt
 
+SENTENCE_BEGIN = "<s>"
+SENTENCE_END = "</s>"
+UNK = "<UNK>"
+
+UNKNOWN_THRESHOLD = 2
+
 def tokenize(text: str, n: int) -> list:
     """
     Tokenize a text for ngram model.
@@ -39,11 +45,6 @@ def create_ngrams(tokens: list, n: int) -> list:
         ngrams.append(tuple(tokens[i : i + n]))
     return ngrams
 
-SENTENCE_BEGIN = "<s>"
-SENTENCE_END = "</s>"
-
-UNKNOWN_THRESHOLD = 2
-
 class NGRAM_Model:
     n = None
     n_gram_frequencies = Counter()
@@ -78,9 +79,10 @@ class NGRAM_Model:
         probability = 1
         for ngram in ngrams:
             # Apply laplace smoothing to avoid zero probabilities
-            probability *= 1 / self.score_ngram_laplace(ngram)
+            probability *= self.score_ngram_laplace(ngram)
         return probability ** (-1 / len(ngrams))
 
+    # TODO: train should take in a list of tokenized sentences then split into train and held out depending on the model smoothing method
     def train(self, train_tokens: list, held_out_tokens: list, verbose: bool = False) -> None:
         """Trains the language model on the given data. Assumes that the given data
         has tokens that are white-space separated, has one sentence per line, and
@@ -91,11 +93,11 @@ class NGRAM_Model:
           verbose (bool): default value False, to be used to turn on/off debugging prints
         """
         # convert all tokens with counts less than UNKNOWN_THRESHOLD to UNK
-        token_counts = Counter(tokens)
+        token_counts = Counter(train_tokens)
         keys_to_remove = [
             key for key, count in token_counts.items() if count < UNKNOWN_THRESHOLD
         ]
-        updated_tokens = [UNK if token in keys_to_remove else token for token in tokens]
+        updated_tokens = [UNK if token in keys_to_remove else token for token in train_tokens]
 
         # get frequencies of ngrams and n-1 grams for scoring
         ngrams = create_ngrams(updated_tokens, self.n)
