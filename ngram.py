@@ -58,6 +58,27 @@ class NGRAM_Model:
           n_gram (int): the n-gram order of the language model to create
         """
         self.n = n_gram
+   
+    def perplexity(self, sentence_tokens: list) -> float:
+        """Calculates the perplexity of a given string representing a single sequence of tokens.
+        Args:
+          sentence_tokens (list): a list of tokens to calculate the perplexity of
+
+        Returns:
+          float: the perplexity value of the given tokens for this model
+        """
+        # ensure sentence doesn't contain any tokens that are not in the vocab
+        updated_sentence_tokens = [
+            UNK if token not in self.vocab else token for token in sentence_tokens
+        ]
+
+        # begin scoring
+        ngrams = create_ngrams(updated_sentence_tokens, self.n)
+        probability = 1
+        for ngram in ngrams:
+            # Apply laplace smoothing to avoid zero probabilities
+            probability *= 1 / self.score_ngram_laplace(ngram)
+        return probability ** (-1 / len(ngrams))
 
     def train(self, train_tokens: list, held_out_tokens: list, verbose: bool = False) -> None:
         """Trains the language model on the given data. Assumes that the given data
@@ -95,7 +116,7 @@ class NGRAM_Model:
             print("top 10 ngram_frequencies: ", self.ngram_frequencies.most_common(10))
             print("top 10 token_freqencies: ", self.token_frequencies.most_common(10))
             print("total ngrams: ", len(self.ngram_frequencies))
-
+ 
     def score(self, sentence_tokens: list) -> float:
         """Calculates the probability score for a given string representing a single sequence of tokens.
         Args:
@@ -330,5 +351,3 @@ class LinearInterpolation:
         
         scale = 1 / sub_divisions
         return list(map(lambda x: list(map(lambda y: y * scale, x)), recursive_generation([], sub_divisions, 0)))
-    
-    
