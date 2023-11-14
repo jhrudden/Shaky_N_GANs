@@ -47,51 +47,51 @@ def create_ngrams(tokens: list, n: int) -> list:
 
 class NGRAM_Model:
     n = None
-    n_gram_frequencies = Counter()
-    n_minus_one_gram_frequencies = Counter()
     number_training_tokens = 0
     number_of_non_starting_tokens = 0
     vocab_size = 0
     vocab = set()
 
-    def __init__(self, n_gram):
+    def __init__(self, n_gram, scoring_method: Literal['laplace', 'LI_expectation_maximization', 'LI_grid_search'] = 'laplace'):
         """Initializes an untrained NgramModel instance.
         Args:
           n_gram (int): the n-gram order of the language model to create
         """
         self.n = n_gram
-   
-    def perplexity(self, sentence_tokens: list) -> float:
-        """Calculates the perplexity of a given string representing a single sequence of tokens.
-        Args:
-          sentence_tokens (list): a list of tokens to calculate the perplexity of
-
-        Returns:
-          float: the perplexity value of the given tokens for this model
-        """
-        # ensure sentence doesn't contain any tokens that are not in the vocab
-        updated_sentence_tokens = [
-            UNK if token not in self.vocab else token for token in sentence_tokens
-        ]
-
-        # begin scoring
-        ngrams = create_ngrams(updated_sentence_tokens, self.n)
-        probability = 1
-        for ngram in ngrams:
-            # Apply laplace smoothing to avoid zero probabilities
-            probability *= self.score_ngram_laplace(ngram)
-        return probability ** (-1 / len(ngrams))
+        self.scoring_method = scoring_method
+        if "LI" in scoring_method:
+            method = "expectation_maximization" if "expectation_maximization" in scoring_method else "grid_search"
+            self.linear_interpolation = LinearInterpolation(n_gram, method=method)
+        elif scoring_method == 'laplace':
+            self.linear_interpolation = None
+        else:
+            raise ValueError(f'Unknown scoring method {scoring_method}')
 
     # TODO: train should take in a list of tokenized sentences then split into train and held out depending on the model smoothing method
-    def train(self, train_tokens: list, held_out_tokens: list, verbose: bool = False) -> None:
+    def train(self, train_sentences: list, hold_out_size: float = 0.1, verbose: bool = False) -> None:
         """Trains the language model on the given data. Assumes that the given data
         has tokens that are white-space separated, has one sentence per line, and
         that the sentences begin with <s> and end with </s>
         Args:
-          train_tokens (list): tokenized data to be trained on as a single list
-          held_out_tokens (list): tokenized data to be used for finding linear interpolation weights
+          train_sentences (list): a list of tokenized sentences to train on
+          hold_out_size (float): the percentage of training data to hold out for linear interpolation training
           verbose (bool): default value False, to be used to turn on/off debugging prints
         """
+        # split into train and held out if necessary
+        if self.scoring_method != 'laplace':
+            num_held_out = int(len(train_sentences) * hold_out_size)
+            held_out_sentences = train_sentences[:num_held_out]
+            train_sentences = train_sentences[num_held_out:]
+            # TODO: maybe need to add UNK to held out sentences?
+            held_out_tokens = np.concatenate(held_out_sentences)
+            if verbose:
+                print(f"Training with {len(train_sentences)} sentences and {len(held_out_sentences)} held out sentences")
+                print("Beginning linear interpolation training")
+            self.linear_interpolation.train(held_out_tokens)
+            if verbose:
+                print("Finished linear interpolation training. Weights: ", self.linear_interpolation._weights)
+        
+        train_tokens = np.concatenate(train_sentences)
         # convert all tokens with counts less than UNKNOWN_THRESHOLD to UNK
         token_counts = Counter(train_tokens)
         keys_to_remove = [
@@ -99,11 +99,21 @@ class NGRAM_Model:
         ]
         updated_tokens = [UNK if token in keys_to_remove else token for token in train_tokens]
 
-        # get frequencies of ngrams and n-1 grams for scoring
-        ngrams = create_ngrams(updated_tokens, self.n)
-        n_minus_one_grams = create_ngrams(updated_tokens, self.n - 1)
-        self.n_gram_frequencies = Counter(ngrams)
-        self.n_minus_one_gram_frequencies = Counter(n_minus_one_grams)
+        # depending on scoring method, we may need more than just the ngrams and n-1 grams
+        self.gram_to_freq = {}
+        if self.scoring_method == 'laplace':
+            ngrams = create_ngrams(updated_tokens, self.n)
+            self.gram_to_freq[self.n] = Counter(ngrams)
+            if self.n > 1:
+                n_minus_one_grams = create_ngrams(updated_tokens, self.n - 1)
+                self.gram_to_freq[self.n - 1] = Counter(n_minus_one_grams)
+        
+        elif self.scoring_method == 'LI_expectation_maximization' or self.scoring_method == 'LI_grid_search':
+            for n in range(1, self.n + 1):
+                curr_ngrams = create_ngrams(updated_tokens, n)
+                self.gram_to_freq[n] = Counter(curr_ngrams)
+        
+
 
         # get frequencies of tokens for scoring of unigrams
         self.number_training_tokens = len(updated_tokens)
@@ -121,7 +131,8 @@ class NGRAM_Model:
             print("total ngrams: ", len(self.ngram_frequencies))
  
     def score(self, sentence_tokens: list) -> float:
-        """Calculates the probability score for a given string representing a single sequence of tokens.
+        """Calculates the probability score for a given string representing a single sequence of tokens. 
+        Scoring method is determined by the scoring_method attribute of this model
         Args:
           sentence_tokens (list): a tokenized sequence to be scored by this model
 
@@ -136,11 +147,11 @@ class NGRAM_Model:
 
         # begin scoring
         ngrams = create_ngrams(updated_sentence_tokens, self.n)
-        probability = 1
-        for ngram in ngrams:
-            # Apply laplace smoothing to avoid zero probabilities
-            probability *= self.score_ngram_laplace(ngram)
-        return probability
+
+        if self.scoring_method == 'laplace':
+            return np.prod([self.score_ngram_laplace(ngram) for ngram in ngrams])
+        else:
+            return np.prod([self.score_ngram_linear_interpolation(ngram) for ngram in ngrams])
 
     def score_ngram_laplace(self, ngram: tuple) -> float:
         """
@@ -150,7 +161,7 @@ class NGRAM_Model:
         """
         def get_denom(ngram):
             if self.n > 1:
-                return self.n_minus_one_gram_frequencies[ngram[:-1]]
+                return self.gram_to_freq[self.n - 1][ngram[:-1]]
             else:
                 return (
                     self.number_training_tokens
@@ -158,10 +169,25 @@ class NGRAM_Model:
 
         assert len(ngram) == self.n
 
-        return (self.n_gram_frequencies[ngram] + 1) / (
+        return (self.gram_to_freq[self.n][ngram] + 1) / (
             get_denom(ngram) + self.vocab_size
         )
+    
+    def score_ngram_linear_interpolation(self, ngram: tuple) -> float:
+        assert self.linear_interpolation is not None
+        assert self.linear_interpolation._weights is not None
+        assert len(ngram) == self.n
 
+        weights = self.linear_interpolation._weights
+        score = 0
+        for i in range(1, self.n + 1):
+            current_gram_freq = self.gram_to_freq[i][ngram[-(i+1):]]
+            current_n_minus_one_gram_freq = self.gram_to_freq[i - 1][ngram[-(i+1):][:-1]] if i > 1 else self.number_training_tokens
+            p_current_gram = current_gram_freq / current_n_minus_one_gram_freq
+            score += weights[i] * p_current_gram
+        return score
+
+    # TODO make this work for linear interpolation too
     def score_ngram_generation(self, ngram: tuple) -> float:
         """
         Calculates the probability score for a given ngram of size n. Assume generated ngrams
@@ -170,17 +196,18 @@ class NGRAM_Model:
           ngram (tuple): a tuple of strings representing an ngram
         """
         assert len(ngram) == self.n
-        assert ngram in self.n_gram_frequencies
+        assert ngram in self.gram_to_freq[self.n]
 
         # if ngram is a unigram, we will not being generating start tokens, so we only look at training tokens that are not start tokens
         denominator = (
-            self.n_minus_one_gram_frequencies[ngram[:-1]]
+            self.gram_to_freq[self.n - 1][ngram[:-1]]
             if self.n > 1
             else self.number_of_non_starting_tokens
         )
 
-        return self.n_gram_frequencies[ngram] / (denominator)
+        return self.gram_to_freq[self.n][ngram] / (denominator)
 
+    # GET THIS WORKING WITH LINEAR INTERPOLATION
     def generate_sentence(self) -> list:
         """Generates a single sentence from a trained language model using the Shannon technique.
 
@@ -213,7 +240,7 @@ class NGRAM_Model:
                 current_n_minus_one_gram = tuple(sentence[-(self.n - 1) :])
                 all_possible_ngrams = [
                     ngram
-                    for ngram in self.n_gram_frequencies.keys()
+                    for ngram in self.gram_to_freq[self.n].keys()
                     if ngram[:-1] == current_n_minus_one_gram
                 ]
 
@@ -247,15 +274,44 @@ class NGRAM_Model:
         """
         return [self.generate_sentence() for i in range(n)]
 
+           
+    def perplexity(self, sentence_tokens: list) -> float:
+        """Calculates the perplexity of a given string representing a single sequence of tokens.
+        Args:
+          sentence_tokens (list): a list of tokens to calculate the perplexity of
+
+        Returns:
+          float: the perplexity value of the given tokens for this model
+        """
+        # ensure sentence doesn't contain any tokens that are not in the vocab
+        updated_sentence_tokens = [
+            UNK if token not in self.vocab else token for token in sentence_tokens
+        ]
+
+        # begin scoring
+        probability = self.score(updated_sentence_tokens)
+        num_ngrams = len(updated_sentence_tokens) - self.n + 1
+        print("sentence: ", updated_sentence_tokens)
+        print("probability: ", num_ngrams)
+        return probability ** (-1 / num_ngrams)
+
 class LinearInterpolation:
-    def __init__(self, ngram: int, held_out_tokens: list, method: Literal['grid_search', 'expectation_maximization'], sub_divisions: int = 50):
+    def __init__(self, ngram: int, method: Literal['grid_search', 'expectation_maximization'], sub_divisions: int = 50):
         self.ngram = ngram
-        ngram_to_freq = {}
-        num_tokens = len(held_out_tokens)
         self.ngram_to_prob = {}
         self.ngrams = {}
     
-        for n in range(1, ngram + 1):
+        self.method = method
+        self.sub_divisions = sub_divisions
+        self._weights = None
+        
+    def train(self, held_out_tokens: list):
+        if self._weights is not None:
+            return
+
+        ngram_to_freq = {}
+        num_tokens = len(held_out_tokens)
+        for n in range(1, self.ngram + 1):
             curr_ngrams = create_ngrams(held_out_tokens, n)
             if n == self.ngram:
                 self.ngrams = curr_ngrams
@@ -268,17 +324,10 @@ class LinearInterpolation:
 
         # turn ngram_to_prob into matrix where each row is a sample from self.ngrams and each column is a probability of col+1 gram occuring given the previous col grams
         self.X = np.zeros((len(self.ngrams), self.ngram))
+
         for i, ngram in enumerate(self.ngrams):
             for j in range(self.ngram):
                 self.X[i, j] = self.ngram_to_prob[j+1][ngram[-(j+1):]]
-        
-        self.method = method
-        self.sub_divisions = sub_divisions
-        self.weights = None
-        
-    def train(self):
-        if self.weights is not None:
-            pass
         if self.method == 'grid_search':
             self.grid_search(self.sub_divisions)
         elif self.method == 'expectation_maximization':
@@ -299,18 +348,8 @@ class LinearInterpolation:
                 best_mle = mle
                 best_weights = lambdas
         
-        self.weights = best_weights
+        self._weights = best_weights
         return best_weights
-    
-    def draw_samples(self):
-        # draw samples from self.ngrams
-        # create self.ngram plots side by side of the distribution of each ngram
-        fig, axs = plt.subplots(1, self.ngram, figsize=(10, 10))
-        for i in range(self.ngram):
-            axs[i].hist(self.X[:, i], bins=50)
-            axs[i].set_title(f'Ngram {i+1}')
-        plt.show()
-    
 
     def expectation_maximization(self):
         # initialize weights to be uniform
@@ -322,7 +361,7 @@ class LinearInterpolation:
             if np.allclose(weights, new_weights):
                 break
             weights = new_weights
-        self.weights = weights
+        self._weights = weights
 
     def _e_step(self, weights):
         # TODO: Shouldn't this use MLE? Right now we are determining how weighted ngram probs individually contribute to overal sum of weighted ngram probs
