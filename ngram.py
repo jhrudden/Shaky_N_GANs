@@ -17,7 +17,8 @@ def tokenize(text: str, n: int) -> list:
     Args:
       text (str): a string representing a sequence of sentences
     """
-    lines = nltk.sent_tokenize(text)
+    # lines = nltk.sent_tokenize(text)
+    lines = text.split('\n')
     sentences = []
     for line in lines:
         sentence = []
@@ -183,6 +184,9 @@ class NGRAM_Model:
         for i in range(1, self.n + 1):
             current_gram_freq = self.gram_to_freq[i][ngram[-(i+1):]]
             current_n_minus_one_gram_freq = self.gram_to_freq[i - 1][ngram[-(i+1):][:-1]] if i > 1 else self.number_training_tokens
+            # avoid dividing by 0
+            if current_n_minus_one_gram_freq == 0:
+                continue
             p_current_gram = current_gram_freq / current_n_minus_one_gram_freq
             score += weights[i] * p_current_gram
         return score
@@ -290,10 +294,8 @@ class NGRAM_Model:
 
         # begin scoring
         probability = self.score(updated_sentence_tokens)
-        num_ngrams = len(updated_sentence_tokens) - self.n + 1
-        print("sentence: ", updated_sentence_tokens)
-        print("probability: ", num_ngrams)
-        return probability ** (-1 / num_ngrams)
+        N = len(list(filter(lambda x: x != SENTENCE_BEGIN, updated_sentence_tokens)))
+        return probability ** (-1 / N)
 
 class LinearInterpolation:
     def __init__(self, ngram: int, method: Literal['grid_search', 'expectation_maximization'], sub_divisions: int = 50):
