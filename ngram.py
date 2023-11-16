@@ -181,14 +181,19 @@ class NGRAM_Model:
 
         weights = self.linear_interpolation._weights
         score = 0
-        for i in range(1, self.n + 1):
-            current_gram_freq = self.gram_to_freq[i][ngram[-(i+1):]]
-            current_n_minus_one_gram_freq = self.gram_to_freq[i - 1][ngram[-(i+1):][:-1]] if i > 1 else self.number_training_tokens
-            # avoid dividing by 0
-            if current_n_minus_one_gram_freq == 0:
+        for i in range(self.n, 0, -1):
+            current_gram_freq = self.gram_to_freq[i][ngram[-i:]]
+            current_n_minus_one_gram_freq = self.gram_to_freq[i - 1][ngram[-i:][:-1]] if i > 1 else self.number_training_tokens
+            # backoff to lower order ngrams if current ngram has zero probability
+            if current_n_minus_one_gram_freq == 0 or current_gram_freq == 0:
                 continue
             p_current_gram = current_gram_freq / current_n_minus_one_gram_freq
-            score += weights[i] * p_current_gram
+            score += weights[i-1] * p_current_gram
+
+        # this should never happen since we are using UNK tokens, so unigram freqs should never have zero probability
+        if score == 0:
+            print(f"Score is 0 for ngram {ngram} with subgrams {subgrams} and sub_freqs {sub_freqs}")
+
         return score
 
     # TODO make this work for linear interpolation too
