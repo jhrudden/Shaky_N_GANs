@@ -46,6 +46,7 @@ def create_ngrams(tokens: list, n: int) -> list:
         ngrams.append(tuple(tokens[i : i + n]))
     return ngrams
 
+# TODO: might investigate good turing
 class NGRAM_Model:
     n = None
     number_training_tokens = 0
@@ -153,6 +154,41 @@ class NGRAM_Model:
             return np.prod([self.score_ngram_laplace(ngram) for ngram in ngrams])
         else:
             return np.prod([self.score_ngram_linear_interpolation(ngram) for ngram in ngrams])
+    
+    def score_ngram_linear_interpolation(self, ngram: tuple, for_generation: bool = False) -> float:
+        """
+        Calculates the probability score for a given ngram of size n. Use linear interpolation to avoid zero probabilities.
+        Args:
+          ngram (tuple): a tuple of strings representing an ngram
+          for_generation (bool): whether or not we are scoring for generation.
+
+        """
+        assert self.linear_interpolation is not None
+        assert self.linear_interpolation._weights is not None
+        assert len(ngram) == self.n
+
+        weights = self.linear_interpolation._weights
+        score = 0
+        for i in range(self.n, 0, -1):
+            current_gram_freq = self.gram_to_freq[i][ngram[-i:]]
+            if i == 1:
+                current_n_minus_one_gram_freq = self.number_training_tokens
+                if for_generation:
+                    current_n_minus_one_gram_freq = self.number_of_non_starting_tokens
+            else:
+                current_n_minus_one_gram_freq = self.gram_to_freq[i - 1][ngram[-i:][:-1]] 
+            
+
+            # backoff to lower order ngrams if current ngram has zero probability
+            if current_n_minus_one_gram_freq == 0:
+                continue
+            p_current_gram = current_gram_freq / current_n_minus_one_gram_freq
+            score += weights[i-1] * p_current_gram
+        # this should never happen since we are using UNK tokens, so unigram freqs should never have zero probability
+        if score == 0:
+            print(f"Score is 0 for ngram {ngram} with subgrams {subgrams} and sub_freqs {sub_freqs}")
+
+        return score
 
     def score_ngram_laplace(self, ngram: tuple) -> float:
         """
@@ -173,28 +209,6 @@ class NGRAM_Model:
         return (self.gram_to_freq[self.n][ngram] + 1) / (
             get_denom(ngram) + self.vocab_size
         )
-    
-    def score_ngram_linear_interpolation(self, ngram: tuple) -> float:
-        assert self.linear_interpolation is not None
-        assert self.linear_interpolation._weights is not None
-        assert len(ngram) == self.n
-
-        weights = self.linear_interpolation._weights
-        score = 0
-        for i in range(self.n, 0, -1):
-            current_gram_freq = self.gram_to_freq[i][ngram[-i:]]
-            current_n_minus_one_gram_freq = self.gram_to_freq[i - 1][ngram[-i:][:-1]] if i > 1 else self.number_training_tokens
-            # backoff to lower order ngrams if current ngram has zero probability
-            if current_n_minus_one_gram_freq == 0 or current_gram_freq == 0:
-                continue
-            p_current_gram = current_gram_freq / current_n_minus_one_gram_freq
-            score += weights[i-1] * p_current_gram
-
-        # this should never happen since we are using UNK tokens, so unigram freqs should never have zero probability
-        if score == 0:
-            print(f"Score is 0 for ngram {ngram} with subgrams {subgrams} and sub_freqs {sub_freqs}")
-
-        return score
 
     # TODO make this work for linear interpolation too
     def score_ngram_generation(self, ngram: tuple) -> float:
@@ -206,6 +220,9 @@ class NGRAM_Model:
         """
         assert len(ngram) == self.n
         assert ngram in self.gram_to_freq[self.n]
+
+        if self.scoring_method != 'laplace':
+            return self.score_ngram_linear_interpolation(ngram, for_generation=True)
 
         # if ngram is a unigram, we will not being generating start tokens, so we only look at training tokens that are not start tokens
         denominator = (
@@ -254,10 +271,12 @@ class NGRAM_Model:
                 ]
 
 
+            # TODO: proabilities are not correct for linear interpolation as they don't sum to 1
             all_possible_ngrams_probabilities = [
                 self.score_ngram_generation(ngram) for ngram in all_possible_ngrams
             ]
-
+            print("probabilities: ", all_possible_ngrams_probabilities)
+ 
 
             # randomly sample next ngram based on probabilities
             next_ngram_index = np.random.choice(
