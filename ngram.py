@@ -131,7 +131,7 @@ class NGRAM_Model:
             if i == 1:
                 current_n_minus_one_gram_freq = unigram_denom
             else:
-                current_n_minus_one_gram_freq = self.gram_to_freq[i - 1][ngram[-i:][:-1]] 
+                current_n_minus_one_gram_freq = self.n_minus_one_gram_to_freq[i - 1][ngram[-i:][:-1]] 
             
 
             # backoff to lower order ngrams if current ngram has zero probability
@@ -141,7 +141,8 @@ class NGRAM_Model:
             score += weights[i-1] * p_current_gram
         # this should never happen since we are using UNK tokens, so unigram freqs should never have zero probability
         if score == 0:
-            print(f"Score is 0 for ngram {ngram} with subgrams {subgrams} and sub_freqs {sub_freqs}")
+            print(f"Score is 0 for ngram {ngram} with subgrams {subgrams}")
+            print(f'weights: {weights}')
 
         return score
 
@@ -360,9 +361,12 @@ class NGRAM_Model:
         raw_token_counter = Counter(np.concatenate(train_sentences))
         train_tokens_with_unk = []
         self.number_of_non_starting_tokens = sum(raw_token_counter.values())
+        keys_to_remove = set([
+            key for key, count in raw_token_counter.items() if count < UNKNOWN_THRESHOLD
+        ])
         for sentence in train_sentences:
             train_tokens_with_unk.append(
-                [UNK if token not in raw_token_counter else token for token in sentence]
+                [UNK if token in keys_to_remove else token for token in sentence]
             )
         
         for n in range(1, self.n + 1):
@@ -376,6 +380,10 @@ class NGRAM_Model:
                 self.number_training_tokens = len(curr_gram_tokens)
                 self.vocab = set(curr_gram_tokens)
                 self.vocab_size = len(self.vocab)
+            else:
+                self.n_minus_one_gram_to_freq[n - 1] = Counter(
+                    create_ngrams(curr_gram_tokens, n - 1)
+                )
 
 class LinearInterpolation:
     def __init__(self, ngram: int, method: Literal['grid_search', 'expectation_maximization'], sub_divisions: int = 50):
@@ -395,26 +403,27 @@ class LinearInterpolation:
         for n in range(1, self.ngram + 1):
             curr_ngram_tokens = prepare_tokenized_sentences(held_out_sentences, n)
             curr_ngrams = create_ngrams(curr_ngram_tokens, n)
+            current_n_minus_one_gram = create_ngrams(curr_ngram_tokens, n - 1)
             if n == self.ngram:
                 self.ngrams = curr_ngrams
-            ngram_to_freq[n] = Counter(curr_ngrams)
+            ngram_to_freq = Counter(curr_ngrams)
+            n_minus_one_gram_to_freq = Counter(current_n_minus_one_gram)
 
             if n > 1:
-
-                # NEED a self.n_minus_one_gram_to_freq for linear interpolation
-                # As each subgram should have a probability distribution that sums to 1
-                # so bigram shouldn't have <s><s> as a possible ngram it should only have bigrams that start with <s>
-                self.ngram_to_prob[n] = {k: v / ngram_to_freq[n-1][k[-n:][:-1]] for k, v in ngram_to_freq[n].items()}
+                self.ngram_to_prob[n] = {k: v / n_minus_one_gram_to_freq[k[-n:][:-1]] for k, v in ngram_to_freq.items()}
             else:
                 num_tokens = len(curr_ngram_tokens)
-                self.ngram_to_prob[n] = {k: v / num_tokens for k, v in ngram_to_freq[n].items()}
+                self.ngram_to_prob[n] = {k: v / num_tokens for k, v in ngram_to_freq.items()}
 
         # turn ngram_to_prob into matrix where each row is a sample from self.ngrams and each column is a probability of col+1 gram occuring given the previous col grams
         self.X = np.zeros((len(self.ngrams), self.ngram))
 
         for i, ngram in enumerate(self.ngrams):
             for j in range(self.ngram):
-                self.X[i, j] = self.ngram_to_prob[j+1][ngram[-(j+1):]]
+                curr_sub_gram = ngram[-(j+1):]
+                if curr_sub_gram not in self.ngram_to_prob[j+1]:
+                    continue
+                self.X[i, j] = self.ngram_to_prob[j+1][curr_sub_gram]
         if self.method == 'grid_search':
             self.grid_search(self.sub_divisions)
         elif self.method == 'expectation_maximization':
