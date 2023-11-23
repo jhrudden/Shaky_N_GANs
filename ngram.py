@@ -48,6 +48,7 @@ class NGRAM_Model:
     number_training_tokens = 0
     number_of_non_starting_tokens = 0
     gram_to_freq = {}
+    n_minus_one_gram_to_freq = {}
     vocab_size = 0
     vocab = set()
 
@@ -152,7 +153,7 @@ class NGRAM_Model:
         """
         def get_denom(ngram):
             if self.n > 1:
-                return self.gram_to_freq[self.n - 1][ngram[:-1]]
+                return self.n_minus_one_gram_to_freq[self.n - 1][ngram[:-1]]
             else:
                 return (
                     self.number_training_tokens
@@ -182,7 +183,7 @@ class NGRAM_Model:
 
         # if ngram is a unigram, we will not being generating start tokens, so we only look at training tokens that are not start tokens
         denominator = (
-            self.gram_to_freq[self.n - 1][ngram[:-1]]
+            self.n_minus_one_gram_to_freq[self.n - 1][ngram[:-1]]
             if self.n > 1
             else unigram_denom
         )
@@ -315,8 +316,7 @@ class NGRAM_Model:
             train_sentences (list): a list of tokenized sentences to train on
             verbose (bool): default value False, to be used to turn on/off debugging prints
         """
-        train_sentences = prepare_tokenized_sentences(train_sentences, self.n)
-        train_tokens = np.concatenate(train_sentences)
+        train_tokens = prepare_tokenized_sentences(train_sentences, self.n)
         # convert all tokens with counts less than UNKNOWN_THRESHOLD to UNK
         token_counts = Counter(train_tokens)
         keys_to_remove = [
@@ -329,7 +329,7 @@ class NGRAM_Model:
         self.gram_to_freq[self.n] = Counter(ngrams)
         if self.n > 1:
             n_minus_one_grams = create_ngrams(updated_tokens, self.n - 1)
-            self.gram_to_freq[self.n - 1] = Counter(n_minus_one_grams)
+            self.n_minus_one_gram_to_freq[self.n - 1] = Counter(n_minus_one_grams)
 
         # get frequencies of tokens for scoring of unigrams
         self.number_training_tokens = len(updated_tokens)
