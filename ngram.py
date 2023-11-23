@@ -121,11 +121,7 @@ class NGRAM_Model:
 
         weights = self.linear_interpolation._weights
         score = 0
-        # FOR GENERATION: we need all subgrams probs to sum to 1, so we need to use the unigram prob of the last word in the ngram
-        # so for a trigram: (w1, w2, w3), when calculating the bigram prob, we need to have the denom be the unigram prob of w2
-        # only in contexts that are possible
-        # TODO: Need the probability distrubitons of all subgrams to not include all start token grams
-        # so maybe I should tokenize my training data per subgram size
+
         for i in range(self.n, 0, -1):
             current_gram_freq = self.gram_to_freq[i][ngram[-i:]]
             if i == 1:
@@ -133,16 +129,11 @@ class NGRAM_Model:
             else:
                 current_n_minus_one_gram_freq = self.n_minus_one_gram_to_freq[i - 1][ngram[-i:][:-1]] 
             
-
             # backoff to lower order ngrams if current ngram has zero probability
             if current_n_minus_one_gram_freq == 0:
                 continue
             p_current_gram = current_gram_freq / current_n_minus_one_gram_freq
             score += weights[i-1] * p_current_gram
-        # this should never happen since we are using UNK tokens, so unigram freqs should never have zero probability
-        if score == 0:
-            print(f"Score is 0 for ngram {ngram} with subgrams {subgrams}")
-            print(f'weights: {weights}')
 
         return score
 
@@ -228,21 +219,24 @@ class NGRAM_Model:
                     if ngram[:-1] == current_n_minus_one_gram
                 ]
             total_unigram_freq = self.number_of_non_starting_tokens
-            if self.scoring_method != 'laplace':
-                all_possible_unigrams =[gram[-1:] for gram in all_possible_ngrams] 
-                total_unigram_freq = sum([self.gram_to_freq[1][uni] for uni in all_possible_unigrams])
+            # if self.scoring_method != 'laplace':
+            #     all_possible_unigrams =[gram[-1:] for gram in all_possible_ngrams] 
+            #     total_unigram_freq = sum([self.gram_to_freq[1][uni] for uni in all_possible_unigrams])
 
+            print(f'All possible ngrams: {all_possible_ngrams}')
 
             # TODO: proabilities are not correct for linear interpolation as they don't sum to 1
             all_possible_ngrams_probabilities = [
                 self.score_ngram_generation(ngram, total_unigram_freq) for ngram in all_possible_ngrams
             ]
-            print("probabilities: ", sum(all_possible_ngrams_probabilities))
- 
-            print("all possible prob: ", all_possible_ngrams_probabilities)
+
+            softmaxed_probabilities = np.exp(all_possible_ngrams_probabilities) / np.sum(
+                np.exp(all_possible_ngrams_probabilities)
+            )
+
             # randomly sample next ngram based on probabilities
             next_ngram_index = np.random.choice(
-                len(all_possible_ngrams), p=all_possible_ngrams_probabilities
+                len(all_possible_ngrams), p=softmaxed_probabilities
             )
 
             next_ngram = all_possible_ngrams[next_ngram_index]
