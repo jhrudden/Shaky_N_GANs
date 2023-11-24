@@ -219,11 +219,6 @@ class NGRAM_Model:
                     if ngram[:-1] == current_n_minus_one_gram
                 ]
             total_unigram_freq = self.number_of_non_starting_tokens
-            # if self.scoring_method != 'laplace':
-            #     all_possible_unigrams =[gram[-1:] for gram in all_possible_ngrams] 
-            #     total_unigram_freq = sum([self.gram_to_freq[1][uni] for uni in all_possible_unigrams])
-
-            print(f'All possible ngrams: {all_possible_ngrams}')
 
             # TODO: proabilities are not correct for linear interpolation as they don't sum to 1
             all_possible_ngrams_probabilities = [
