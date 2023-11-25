@@ -2,6 +2,7 @@ import tensorflow_datasets as tfds
 import tensorflow as tf
 import numpy as np
 import nltk 
+import os
 nltk.download('punkt')
 
 def load_decode_and_split_shakespeare(split):
@@ -20,4 +21,14 @@ def load_decode_and_split_shakespeare(split):
     # Split texts into sentences using NLTK
     sentences = [sentence for text in decoded_texts for sentence in text.split('\n') if len(sentence) > 0]
 
+    return sentences
+
+def tokenize_sentences(sentences):
+    # Tokenize sentences into words using NLTK
+    return [nltk.word_tokenize(sentence) for sentence in sentences]
+
+def load_sentences(data_path: str):
+    assert os.path.isfile(data_path)
+    with open(data_path, 'r') as f:
+        sentences = f.readlines()
     return sentences
