@@ -63,7 +63,7 @@ def process_training_data(file_path: str) -> List[List[str]]:
 
     Args:
     file_path (str): The path to the file containing the training data.
-
+    
     Returns:
     List[List[str]]: A list of tokenized sentences with infrequent words replaced by "<UNK>".
     """
