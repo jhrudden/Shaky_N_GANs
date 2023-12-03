@@ -1,21 +1,36 @@
+from typing import Literal
 import torch
 from torch import nn
 from torch.nn import functional as F
 import torch.optim as optim
 from tqdm import tqdm
 from embeddings import create_embedding_dataloader
+import numpy as np
+from torch.utils.tensorboard import SummaryWriter
 
-def gumbel_softmax(logits, temperature: int):
+def gumbel_softmax(logits, temperature: int, hard: bool=False):
     """
     Implements the gumbel softmax function described in https://arxiv.org/pdf/1611.04051.pdf
 
     Args:
         logits (torch.Tensor): The logits to apply the gumbel softmax function to.
         temperature (int): The temperature parameter used to control the smoothness of the softmax function.
+        hard (bool, optional): If True, the output will be one-hot encoded. Default is False.
     """
     U = torch.rand(logits.shape)
-    G = -torch.log(-torch.log(U))
-    return F.softmax((logits + G) / temperature, dim=1)
+    G = -torch.log(-torch.log(U + 1e-20) + 1e-20)
+
+
+    y = F.softmax((logits + G) / temperature, dim=1)
+    if not hard:
+        return y.view(-1, logits.shape[1])
+    
+    largest_indices = torch.argmax(y, dim=1)
+    one_hot = torch.zeros_like(y)
+    one_hot[torch.arange(y.shape[0]), largest_indices] = 1
+    # y_hard has the same gradients as y, but y_hard is one-hot
+    y_hard = (one_hot - y).detach() + y
+    return y_hard.view(-1, logits.shape[1])
 
 class Generator(nn.Module):
     """
@@ -39,27 +54,22 @@ class Generator(nn.Module):
         self.lstm = nn.LSTM(input_size, hidden_size, num_lstm_blocks, batch_first=True)
         self.fc = nn.Linear(hidden_size, output_size)
     
-    def forward(self, z, temp: int, should_sample: bool=False):
+    def forward(self, z, temp: int, hard: bool=False):
         """
         A forward pass through the generator. Generates a sequence of probabilities for each word in the vocabulary based on the input noise.
 
         Args:
             z (torch.Tensor): The input noise. Should be of shape [batch_size, seq_length, input_size]. Sampled from a uniform distribution.
             temp (int): The temperature parameter used to control the smoothness of the softmax function.
-            should_sample (bool, optional): If True, the output will be sampled from the gumbel softmax distribution. Default is False.
+            hard (bool, optional): If True, the output will be one-hot encoded. Default is False.
 
         Returns:
-            if should_sample is True, returns a tensor of shape [batch_size, seq_length] containing a sequence sampled words indices.
-            if should_sample is False, returns a tensor of shape [batch_size, seq_length, output_size] containing the probabilities for each word in the vocabulary.
+            torch.Tensor: A tensor of shape [batch_size, seq_length, output_size] containing the probabilities for each word in the vocabulary.
         """
         lstm_out, _ = self.lstm(z)
         logits = self.fc(lstm_out)
-        gumbel_softmaxed_logits = [gumbel_softmax(logits[:,i,:], temp) for i in range(self.seq_size)]
-        if should_sample:
-            sampled_words = [torch.multinomial(gumbel_softmaxed_logits[i], 1)[0] for i in range(self.seq_size)]
-            return torch.stack(sampled_words, dim=1).squeeze()
-        else:
-            return torch.stack(gumbel_softmaxed_logits, dim=1)
+        gumbel_softmaxed_logits = [gumbel_softmax(logits[:,i,:], temp, hard) for i in range(self.seq_size)]
+        return torch.stack(gumbel_softmaxed_logits, dim=1)
 
 class Discriminator(nn.Module):
     """
@@ -99,7 +109,7 @@ class Discriminator(nn.Module):
         
         return torch.sigmoid(out)
     
-def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_length, generator_input_features, num_epochs=2, batch_size=4, learning_rate=0.001, temperature=1.0, encoding_method="one_hot", debug=True):
+def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_length, generator_input_features, num_epochs=2, batch_size=4, learning_rate=0.001, temperature=1.0, temp_decay_rate: float = 0.001, gumbel_hard: bool = False, encoding_method="one_hot", noise_sample_method: Literal['uniform', 'normal'] = 'uniform', debug=True):
     """
     Trains a Generative Adversarial Network (GAN) consisting of a generator and discriminator.
 
@@ -114,12 +124,21 @@ def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_l
         batch_size (int, optional): Batch size for training. Default is 4.
         learning_rate (float, optional): Learning rate for the optimizers. Default is 0.001.
         temperature (float, optional): Temperature parameter used in gumbel softmax equation. Default is 1.0.
+        temp_decay_rate (float, optional): Rate at which the temperature parameter decays. Default is 0.001.
+        gumbel_hard (bool, optional): If True, the output of the gumbel softmax function will be one-hot encoded. Default is False.
         encoding_method (str, optional): Encoding method for the data ('word_embedding' or 'one_hot'). Default is "one_hot".
+        noise_sample_method (str, optional): Method for sampling noise for the generator ('uniform' or 'normal'). Default is 'uniform'.
         debug (bool, optional): If True, debug information will be printed. Default is True.
 
     Returns:
         tuple: A tuple containing the average generator and discriminator losses for each epoch.
     """
+    assert noise_sample_method in ['uniform', 'normal'], f'Invalid noise sample method: {noise_sample_method}'
+    assert encoding_method in ['word_embedding', 'one_hot'], f'Invalid encoding method: {encoding_method}'
+
+    writer = SummaryWriter()
+
+    hard = True
 
     # Initialize optimizers
     optimizer_G = optim.Adam(generator.parameters(), lr=learning_rate)
@@ -130,19 +149,20 @@ def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_l
 
     # Create data loader
     dataloader = create_embedding_dataloader(tokenized_sentences, word2vec_manager, seq_length, batch_size, encoding_method, verbose=debug)
-    loss_history = []
 
     for i in range(num_epochs):
-        epoch_g_loss = 0.0  # To accumulate generator loss over the epoch
-        epoch_d_loss = 0.0  # To accumulate discriminator loss over the epoch
+        progress_bar = tqdm(dataloader, desc=f'Epoch {i+1}/{num_epochs}')
 
         # Train on batches 
-        for real_data in tqdm(dataloader, desc=f'Epoch {i+1}/{num_epochs}'):
+        for batch_idx, real_data in enumerate(progress_bar):
             batch_size = real_data.size(0)
 
             # Generate fake data
-            noise = torch.randn(batch_size, seq_length, generator_input_features)
-            generated_data = generator(noise, temperature)
+            if noise_sample_method == 'uniform':
+                noise = torch.rand(batch_size, seq_length, generator_input_features)
+            else:
+                noise = torch.randn(batch_size, seq_length, generator_input_features)
+            generated_data = generator(noise, temperature, hard=gumbel_hard)
 
             # Train discriminator on real and fake data
             optimizer_D.zero_grad()
@@ -151,6 +171,7 @@ def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_l
             fake_labels = torch.zeros(batch_size, 1)
             fake_loss = loss(discriminator(generated_data.detach()), fake_labels)
             d_loss = real_loss + fake_loss
+            writer.add_scalar('Discriminator Loss / Train', d_loss, batch_idx)
             d_loss.backward()
             optimizer_D.step()
 
@@ -159,18 +180,18 @@ def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_l
             generated_data = generator(noise, temperature)  
             fake_pred = discriminator(generated_data)
             g_loss = loss(fake_pred, real_labels)
+            writer.add_scalar('Generator Loss / Train', g_loss, batch_idx)
             g_loss.backward()
             optimizer_G.step()
-            
-            epoch_g_loss += g_loss.item()
-            epoch_d_loss += d_loss.item()
 
-        avg_g_loss = epoch_g_loss / len(dataloader)
-        avg_d_loss = epoch_d_loss / len(dataloader)
+            progress_bar.set_description(f'Epoch {i+1}/{num_epochs} | Generator Loss: {g_loss.item():.4f} | Discriminator Loss: {d_loss.item():.4f}')
+
+            # Decay temperature
+            if batch_idx % 100 == 0:
+                temperature = max(temperature * np.exp(-temp_decay_rate * batch_idx), 0.5)
 
         if debug:
             print(f'Epoch {i+1}/{num_epochs} | Generator loss: {avg_g_loss} | Discriminator loss: {avg_d_loss}')
         
-        loss_history.append((avg_g_loss, avg_d_loss))
+    writer.flush()
 
-    return zip(*loss_history)
