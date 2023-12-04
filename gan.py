@@ -112,7 +112,7 @@ class Discriminator(nn.Module):
         
         return torch.sigmoid(out)
     
-def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_length, generator_input_features, num_epochs=2, batch_size=4, learning_rate=0.001, temperature=1.0, temp_decay_rate: float = 0.001, gumbel_hard: bool = False, encoding_method="one_hot", noise_sample_method: Literal['uniform', 'normal'] = 'uniform', device: str = 'cpu', debug=True):
+def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_length, generator_input_features, generator_lr: float = 0.001, discriminator_lr: float = 0.001, num_epochs=2, batch_size=4, learning_rate=0.001, temperature=1.0, temp_decay_rate: float = 0.001, gumbel_hard: bool = False, encoding_method="one_hot", noise_sample_method: Literal['uniform', 'normal'] = 'uniform', device: str = 'cpu', tensorboard_log_dir: str = 'runs', debug: bool = True): 
     """
     Trains a Generative Adversarial Network (GAN) consisting of a generator and discriminator.
 
@@ -123,6 +123,8 @@ def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_l
         word2vec_manager (Any): Embedding manager to handle word embeddings.
         seq_length (int): Sequence length for the sentences.
         generator_input_features (int): Input dimension (number of features) for the generator.
+        generator_lr (float, optional): Learning rate for the generator optimizer. Default is 0.001.
+        discriminator_lr (float, optional): Learning rate for the discriminator optimizer. Default is 0.001.
         num_epochs (int, optional): Number of epochs for training. Default is 2.
         batch_size (int, optional): Batch size for training. Default is 4.
         learning_rate (float, optional): Learning rate for the optimizers. Default is 0.001.
@@ -131,6 +133,7 @@ def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_l
         gumbel_hard (bool, optional): If True, the output of the gumbel softmax function will be one-hot encoded. Default is False.
         encoding_method (str, optional): Encoding method for the data ('word_embedding' or 'one_hot'). Default is "one_hot".
         noise_sample_method (str, optional): Method for sampling noise for the generator ('uniform' or 'normal'). Default is 'uniform'.
+        tensorboard_log_dir (str, optional): Directory to log tensorboard data. Default is 'runs'.
         debug (bool, optional): If True, debug information will be printed. Default is True.
 
     Returns:
@@ -145,8 +148,8 @@ def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_l
     discriminator.to(device)
 
     # Initialize optimizers
-    optimizer_G = optim.Adam(generator.parameters(), lr=learning_rate)
-    optimizer_D = optim.Adam(discriminator.parameters(), lr=learning_rate)
+    optimizer_G = optim.Adam(generator.parameters(), lr=generator_lr)
+    optimizer_D = optim.Adam(discriminator.parameters(), lr=discriminator_lr)
 
     # Initialize loss function
     loss = torch.nn.BCELoss()
