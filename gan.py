@@ -6,6 +6,7 @@ import torch.optim as optim
 from tqdm import tqdm
 from embeddings import create_embedding_dataloader
 import numpy as np
+from sklearn.metrics import accuracy_score
 from torch.utils.tensorboard import SummaryWriter
 
 def gumbel_softmax(logits, temperature: int, hard: bool=False):
@@ -53,6 +54,7 @@ class Generator(nn.Module):
 
         self.lstm = nn.LSTM(input_size, hidden_size, num_lstm_blocks, batch_first=True)
         self.fc = nn.Linear(hidden_size, output_size)
+        self.ls = nn.LogSoftmax(dim=2)
     
     def forward(self, z, temp: int, hard: bool=False):
         """
@@ -67,7 +69,8 @@ class Generator(nn.Module):
             torch.Tensor: A tensor of shape [batch_size, seq_length, output_size] containing the probabilities for each word in the vocabulary.
         """
         lstm_out, _ = self.lstm(z)
-        logits = self.fc(lstm_out)
+        linear = self.fc(lstm_out)
+        logits = self.ls(linear)
         gumbel_softmaxed_logits = [gumbel_softmax(logits[:,i,:], temp, hard) for i in range(self.seq_size)]
         return torch.stack(gumbel_softmaxed_logits, dim=1)
 
@@ -109,7 +112,7 @@ class Discriminator(nn.Module):
         
         return torch.sigmoid(out)
     
-def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_length, generator_input_features, num_epochs=2, batch_size=4, learning_rate=0.001, temperature=1.0, temp_decay_rate: float = 0.001, gumbel_hard: bool = False, encoding_method="one_hot", noise_sample_method: Literal['uniform', 'normal'] = 'uniform', debug=True):
+def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_length, generator_input_features, num_epochs=2, batch_size=4, learning_rate=0.001, temperature=1.0, temp_decay_rate: float = 0.001, gumbel_hard: bool = False, encoding_method="one_hot", noise_sample_method: Literal['uniform', 'normal'] = 'uniform', device: str = 'cpu', debug=True):
     """
     Trains a Generative Adversarial Network (GAN) consisting of a generator and discriminator.
 
@@ -138,7 +141,8 @@ def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_l
 
     writer = SummaryWriter()
 
-    hard = True
+    generator.to(device)
+    discriminator.to(device)
 
     # Initialize optimizers
     optimizer_G = optim.Adam(generator.parameters(), lr=learning_rate)
@@ -149,40 +153,63 @@ def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_l
 
     # Create data loader
     dataloader = create_embedding_dataloader(tokenized_sentences, word2vec_manager, seq_length, batch_size, encoding_method, verbose=debug)
+    avg_g_loss = 0
+    avg_d_loss = 0
 
     for i in range(num_epochs):
+        g_loss_total = 0
+        d_loss_total = 0
+        num_batches = 0
         progress_bar = tqdm(dataloader, desc=f'Epoch {i+1}/{num_epochs}')
 
         # Train on batches 
         for batch_idx, real_data in enumerate(progress_bar):
             batch_size = real_data.size(0)
-
-            # Generate fake data
-            if noise_sample_method == 'uniform':
-                noise = torch.rand(batch_size, seq_length, generator_input_features)
-            else:
-                noise = torch.randn(batch_size, seq_length, generator_input_features)
-            generated_data = generator(noise, temperature, hard=gumbel_hard)
+            real_data = real_data.to(device)
 
             # Train discriminator on real and fake data
+
+            # Generate fake data
+            noise = generate_noise((batch_size, seq_length, generator_input_features), noise_sample_method).to(device)
+            generated_data = generator(noise, temperature, hard=gumbel_hard)
+
             optimizer_D.zero_grad()
             real_labels = torch.ones(batch_size, 1)
             real_loss = loss(discriminator(real_data), real_labels)
             fake_labels = torch.zeros(batch_size, 1)
-            fake_loss = loss(discriminator(generated_data.detach()), fake_labels)
+            fake_preds = discriminator(generated_data.detach())
+            fake_loss = loss(fake_preds, fake_labels)
             d_loss = real_loss + fake_loss
+            
+            # Metrics
+            accuracy = accuracy_score(torch.cat((real_labels, fake_labels)).detach().numpy(), torch.cat((discriminator(real_data), fake_preds)).detach().numpy() > 0.5)
+            writer.add_scalar('Discriminator Accuracy / Train', accuracy, batch_idx)
             writer.add_scalar('Discriminator Loss / Train', d_loss, batch_idx)
+            
+            # Backpropagate and update weights
             d_loss.backward()
             optimizer_D.step()
 
             # Train generator
             optimizer_G.zero_grad()
-            generated_data = generator(noise, temperature)  
+            noise = generate_noise((batch_size, seq_length, generator_input_features), noise_sample_method)
+            generated_data = generator(noise, temperature, hard=gumbel_hard)  
             fake_pred = discriminator(generated_data)
-            g_loss = loss(fake_pred, real_labels)
+            fake_labels = torch.ones(batch_size, 1)
+            
+            # metrics
+            g_loss = loss(fake_pred, fake_labels)
+            accuracy = accuracy_score(fake_labels.detach().numpy(), fake_pred.detach().numpy() > 0.5)
+            writer.add_scalar('Generator Trick Accuracy / Train', accuracy, batch_idx)
             writer.add_scalar('Generator Loss / Train', g_loss, batch_idx)
+
+            # Backpropagate and update weights
             g_loss.backward()
             optimizer_G.step()
+
+            g_loss_total += g_loss.item()
+            d_loss_total += d_loss.item()
+            num_batches += 1
 
             progress_bar.set_description(f'Epoch {i+1}/{num_epochs} | Generator Loss: {g_loss.item():.4f} | Discriminator Loss: {d_loss.item():.4f}')
 
@@ -193,5 +220,42 @@ def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_l
         if debug:
             print(f'Epoch {i+1}/{num_epochs} | Generator loss: {avg_g_loss} | Discriminator loss: {avg_d_loss}')
         
-    writer.flush()
+    avg_g_loss = g_loss_total / num_batches
+    avg_d_loss = d_loss_total / num_batches
 
+    # Log hyperparameters and final average losses
+    hparams = {
+        'learning_rate': learning_rate,
+        'batch_size': batch_size,
+        'temperature': temperature,
+        'temp_decay_rate': temp_decay_rate,
+        # ... add other hyperparameters here
+    }
+
+    metrics = {
+        'final_avg_generator_loss': avg_g_loss,
+        'final_avg_discriminator_loss': avg_d_loss,
+    }
+
+    writer.add_hparams(hparam_dict=hparams, metric_dict=metrics)
+    writer.flush()
+    return avg_g_loss, avg_d_loss
+
+
+def generate_noise(shape: tuple, noise_sample_method: Literal['uniform', 'normal'] = 'uniform'):
+    """
+    Generates noise for the generator.
+
+    Args:
+        shape (tuple): The shape of the noise tensor.
+        noise_sample_method (str, optional): Method for sampling noise for the generator ('uniform' or 'normal'). Default is 'uniform'.
+
+    Returns:
+        torch.Tensor: A tensor of shape [batch_size, seq_length, input_size] containing the noise for the generator.
+    """
+    assert noise_sample_method in ['uniform', 'normal'], f'Invalid noise sample method: {noise_sample_method}'
+    if noise_sample_method == 'uniform':
+        return torch.rand(shape)
+    else:
+        return torch.randn(shape)
+    
