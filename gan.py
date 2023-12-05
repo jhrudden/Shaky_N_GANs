@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Any
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -6,7 +6,8 @@ import torch.optim as optim
 from tqdm import tqdm
 from embeddings import create_embedding_dataloader
 import numpy as np
-from sklearn.metrics import accuracy_score
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from torch.utils.tensorboard import SummaryWriter
 
 def gumbel_softmax(logits, temperature: int, hard: bool=False):
@@ -92,7 +93,6 @@ class Discriminator(nn.Module):
 
         # LSTM layer
         self.lstm = torch.nn.LSTM(input_dim, hidden_dim, batch_first=True)
-        
         self.fc = torch.nn.Linear(hidden_dim, 1)
 
     def forward(self, x):
@@ -112,14 +112,15 @@ class Discriminator(nn.Module):
         
         return torch.sigmoid(out)
     
-def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_length, generator_input_features, generator_lr: float = 0.001, discriminator_lr: float = 0.001, num_epochs=2, batch_size=4, learning_rate=0.001, temperature=1.0, temp_decay_rate: float = 0.001, gumbel_hard: bool = False, encoding_method="one_hot", noise_sample_method: Literal['uniform', 'normal'] = 'uniform', device: str = 'cpu', tensorboard_log_dir: str = 'runs', debug: bool = True): 
+def train(generator, discriminator, training_sentences, validation_sentences, word2vec_manager, seq_length, generator_input_features, generator_lr: float = 0.001, discriminator_lr: float = 0.001, num_epochs=2, batch_size=4, temperature=1.0, temp_decay_rate: float = 0.001, gumbel_hard: bool = False, encoding_method="one_hot", noise_sample_method: Literal['uniform', 'normal'] = 'uniform', device: str = 'cpu', tensorboard_log_dir: str = 'runs'): 
     """
     Trains a Generative Adversarial Network (GAN) consisting of a generator and discriminator.
 
     Args:
         generator (torch.nn.Module): The generator model.
         discriminator (torch.nn.Module): The discriminator model.
-        tokenized_sentences (List[List[str]]): Tokenized sentences for the dataset.
+        training_sentences (List[List[str]]): Tokenized sentences for the dataset.
+        validation_sentences (List[List[str]]): Tokenized sentences for the validation dataset.
         word2vec_manager (Any): Embedding manager to handle word embeddings.
         seq_length (int): Sequence length for the sentences.
         generator_input_features (int): Input dimension (number of features) for the generator.
@@ -127,14 +128,12 @@ def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_l
         discriminator_lr (float, optional): Learning rate for the discriminator optimizer. Default is 0.001.
         num_epochs (int, optional): Number of epochs for training. Default is 2.
         batch_size (int, optional): Batch size for training. Default is 4.
-        learning_rate (float, optional): Learning rate for the optimizers. Default is 0.001.
         temperature (float, optional): Temperature parameter used in gumbel softmax equation. Default is 1.0.
         temp_decay_rate (float, optional): Rate at which the temperature parameter decays. Default is 0.001.
         gumbel_hard (bool, optional): If True, the output of the gumbel softmax function will be one-hot encoded. Default is False.
         encoding_method (str, optional): Encoding method for the data ('word_embedding' or 'one_hot'). Default is "one_hot".
         noise_sample_method (str, optional): Method for sampling noise for the generator ('uniform' or 'normal'). Default is 'uniform'.
         tensorboard_log_dir (str, optional): Directory to log tensorboard data. Default is 'runs'.
-        debug (bool, optional): If True, debug information will be printed. Default is True.
 
     Returns:
         tuple: A tuple containing the average generator and discriminator losses for each epoch.
@@ -142,7 +141,7 @@ def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_l
     assert noise_sample_method in ['uniform', 'normal'], f'Invalid noise sample method: {noise_sample_method}'
     assert encoding_method in ['word_embedding', 'one_hot'], f'Invalid encoding method: {encoding_method}'
 
-    writer = SummaryWriter()
+    writer = SummaryWriter(tensorboard_log_dir)
 
     generator.to(device)
     discriminator.to(device)
@@ -155,43 +154,56 @@ def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_l
     loss = torch.nn.BCELoss()
 
     # Create data loader
-    dataloader = create_embedding_dataloader(tokenized_sentences, word2vec_manager, seq_length, batch_size, encoding_method, verbose=debug)
+    dataloader = create_embedding_dataloader(training_sentences, word2vec_manager, seq_length, batch_size, encoding_method, verbose=False)
+    val_dataloader = create_embedding_dataloader(validation_sentences, word2vec_manager, seq_length, batch_size, encoding_method, verbose=False)
     avg_g_loss = 0
     avg_d_loss = 0
+
+    bleu_smoothing = SmoothingFunction().method5
 
     for i in range(num_epochs):
         g_loss_total = 0
         d_loss_total = 0
         num_batches = 0
         progress_bar = tqdm(dataloader, desc=f'Epoch {i+1}/{num_epochs}')
+        val_dataset = iter(val_dataloader)
 
         # Train on batches 
         for batch_idx, real_data in enumerate(progress_bar):
+            # Decay temperature if necessary
+            if batch_idx % 100 == 1:
+                temperature = max(temperature * np.exp(-temp_decay_rate * batch_idx), 0.5)
+
             batch_size = real_data.size(0)
             real_data = real_data.to(device)
 
-            # Train discriminator on real and fake data
+            # only train discriminator every 2 batches
+            if batch_idx % 2 == 0:
+                # Generate fake data
+                noise = generate_noise((batch_size, seq_length, generator_input_features), noise_sample_method).to(device)
+                generated_data = generator(noise, temperature, hard=gumbel_hard)
 
-            # Generate fake data
-            noise = generate_noise((batch_size, seq_length, generator_input_features), noise_sample_method).to(device)
-            generated_data = generator(noise, temperature, hard=gumbel_hard)
+                optimizer_D.zero_grad()
+                real_labels = torch.ones(batch_size, 1)
+                predictions_on_real_data = discriminator(real_data)
+                real_loss = loss(predictions_on_real_data, real_labels)
+                fake_labels = torch.zeros(batch_size, 1)
+                fake_preds = discriminator(generated_data.detach())
+                fake_loss = loss(fake_preds, fake_labels)
+                d_loss = real_loss + fake_loss
+                
+                # Metrics (accuracy, precision, recall, f1, loss)
+                accuracy, precision, recall, f1 = get_discriminator_metrics(predictions_on_real_data, fake_preds) 
 
-            optimizer_D.zero_grad()
-            real_labels = torch.ones(batch_size, 1)
-            real_loss = loss(discriminator(real_data), real_labels)
-            fake_labels = torch.zeros(batch_size, 1)
-            fake_preds = discriminator(generated_data.detach())
-            fake_loss = loss(fake_preds, fake_labels)
-            d_loss = real_loss + fake_loss
-            
-            # Metrics
-            accuracy = accuracy_score(torch.cat((real_labels, fake_labels)).detach().numpy(), torch.cat((discriminator(real_data), fake_preds)).detach().numpy() > 0.5)
-            writer.add_scalar('Discriminator Accuracy / Train', accuracy, batch_idx)
-            writer.add_scalar('Discriminator Loss / Train', d_loss, batch_idx)
-            
-            # Backpropagate and update weights
-            d_loss.backward()
-            optimizer_D.step()
+                writer.add_scalar('Discriminator Accuracy / Train', accuracy, batch_idx)
+                writer.add_scalar('Discriminator Precision / Train', precision, batch_idx)
+                writer.add_scalar('Discriminator Recall / Train', recall, batch_idx)
+                writer.add_scalar('Discriminator F1 / Train', f1, batch_idx)
+                writer.add_scalar('Discriminator Loss / Train', d_loss, batch_idx)
+                
+                # Backpropagate and update weights
+                d_loss.backward()
+                optimizer_D.step()
 
             # Train generator
             optimizer_G.zero_grad()
@@ -200,38 +212,57 @@ def train(generator, discriminator, tokenized_sentences, word2vec_manager, seq_l
             fake_pred = discriminator(generated_data)
             fake_labels = torch.ones(batch_size, 1)
             
-            # metrics
             g_loss = loss(fake_pred, fake_labels)
-            accuracy = accuracy_score(fake_labels.detach().numpy(), fake_pred.detach().numpy() > 0.5)
-            writer.add_scalar('Generator Trick Accuracy / Train', accuracy, batch_idx)
             writer.add_scalar('Generator Loss / Train', g_loss, batch_idx)
 
             # Backpropagate and update weights
             g_loss.backward()
             optimizer_G.step()
 
+            # Generator Metrics (besides loss)
+            # Want to see how well the generator is tricking the discriminator
+            gen_trick_accuracy = accuracy_score(fake_labels.detach().numpy(), fake_pred.detach().numpy() > 0.5)
+            writer.add_scalar('Generator Trick Accuracy / Train', gen_trick_accuracy, batch_idx)
+
+            if batch_idx % 10 == 0:
+                # Calculate sentence BLEU score
+                generated_sentences = turn_generator_output_to_text(generated_data, word2vec_manager)
+                sentence_bleu_scores =[sentence_bleu(validation_sentences, generated_sentence, smoothing_function=bleu_smoothing) for generated_sentence in generated_sentences]
+                mean_sentence_bleu_score = np.mean(sentence_bleu_scores)
+
+                writer.add_scalar('Sentence BLEU Score / Train', mean_sentence_bleu_score, batch_idx)
+
+                # TODO: Calculate Validation Metrics (accuracy, precision, recall, f1, loss) for discriminator
+                # This will help us understand how well the discriminator is doing on the validation set (helps see if its overfitting)
+                val_data = next(val_dataset)
+                val_data = val_data.to(device)
+                val_preds = discriminator(val_data)
+                val_accuracy, val_precision, val_recall, val_f1 = get_discriminator_metrics(val_preds, fake_preds)
+                writer.add_scalar('Discriminator Accuracy / Validation', val_accuracy, batch_idx)
+                writer.add_scalar('Discriminator Precision / Validation', val_precision, batch_idx)
+                writer.add_scalar('Discriminator Recall / Validation', val_recall, batch_idx)
+                writer.add_scalar('Discriminator F1 / Validation', val_f1, batch_idx)
+                # loss 
+                val_loss = loss(val_preds, real_labels)
+                writer.add_scalar('Discriminator Loss / Validation', val_loss, batch_idx)
+
+
             g_loss_total += g_loss.item()
             d_loss_total += d_loss.item()
             num_batches += 1
 
+
             progress_bar.set_description(f'Epoch {i+1}/{num_epochs} | Generator Loss: {g_loss.item():.4f} | Discriminator Loss: {d_loss.item():.4f}')
-
-            # Decay temperature
-            if batch_idx % 100 == 0:
-                temperature = max(temperature * np.exp(-temp_decay_rate * batch_idx), 0.5)
-
-        if debug:
-            print(f'Epoch {i+1}/{num_epochs} | Generator loss: {avg_g_loss} | Discriminator loss: {avg_d_loss}')
         
     avg_g_loss = g_loss_total / num_batches
     avg_d_loss = d_loss_total / num_batches
 
     # Log hyperparameters and final average losses
     hparams = {
-        'learning_rate': learning_rate,
+        'generator_lr': generator_lr,
+        'discriminator_lr': discriminator_lr,
         'batch_size': batch_size,
         'temperature': temperature,
-        'temp_decay_rate': temp_decay_rate,
         # ... add other hyperparameters here
     }
 
@@ -261,4 +292,49 @@ def generate_noise(shape: tuple, noise_sample_method: Literal['uniform', 'normal
         return torch.rand(shape)
     else:
         return torch.randn(shape)
+
+def get_discriminator_metrics(real_data_predictions: torch.Tensor, generated_data_predictions: torch.Tensor):
+    """
+    Calculates the accuracy, precision, recall, and f1 score for the discriminator. Assuming discriminator is binary classifier (has sigmoid as final layer).
+
+    Args:
+        real_data_predictions (torch.Tensor): The predictions for the real data.
+        generated_data_predictions (torch.Tensor): The predictions for the generated data.
     
+    Returns:
+        tuple: A tuple containing the accuracy, precision, recall, and f1 score for the discriminator.
+    """
+    real_labels = torch.ones(real_data_predictions.shape[0], 1)
+    fake_labels = torch.zeros(generated_data_predictions.shape[0], 1)
+    labels = torch.cat((real_labels, fake_labels)).flatten().numpy().astype(int)
+    predictions = torch.cat((real_data_predictions, generated_data_predictions)).detach().flatten().numpy() > 0.5
+    predictions = predictions.astype(int)
+    accuracy = accuracy_score(labels, predictions)
+    percision = precision_score(labels, predictions, zero_division=0)
+    recall = recall_score(labels, predictions)
+    f1 = f1_score(labels, predictions)
+    return accuracy, percision, recall, f1
+
+def turn_generator_output_to_text(gen_out: torch.Tensor, word2vec_manager: Any):
+    """
+    Turns the generator output into text.
+
+    Args:
+        gen_out (torch.Tensor): The generator output. Should be of shape [batch_size, seq_length, output_size].
+        word2vec_manager (Any): Embedding manager to handle word embeddings.
+
+    Returns:
+        List[str]: A list of strings containing the generated text.
+    """
+    # need to argmax final dimension of gen_out
+    # then use word2vec_manager to turn the indices into words
+    # then return the list of words
+    batch_size, seq_length, output_size = gen_out.shape
+    gen_out = gen_out.argmax(dim=2)
+    results = []
+    for i in range(batch_size):
+        sentence = []
+        for index in gen_out[i]:
+            sentence.append(word2vec_manager.index_to_word(index))
+        results.append(sentence)
+    return results
