@@ -57,7 +57,7 @@ def load_sentences(data_path: str) -> List[str]:
         sentences = f.readlines()
     return sentences
 
-def process_training_data(file_path: str) -> List[List[str]]:
+def process_training_data(file_path: str, min_sentence_length = 1) -> List[List[str]]:
     """
     Processes the training data by tokenizing sentences and replacing infrequent words with "<UNK>".
 
@@ -69,6 +69,8 @@ def process_training_data(file_path: str) -> List[List[str]]:
     """
     sentences = load_sentences(file_path)
     tokenized_sentences = tokenize_sentences(sentences)
+
+    tokenized_sentences = [sentence for sentence in tokenized_sentences if len(sentence) >= min_sentence_length]
 
     # Count word occurrences
     word_counts = Counter(word for sentence in tokenized_sentences for word in sentence)
