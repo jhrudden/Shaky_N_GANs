@@ -1,4 +1,4 @@
-from typing import Literal, Any
+from typing import Literal, Any, Callable, List
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -9,6 +9,23 @@ import numpy as np
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from torch.utils.tensorboard import SummaryWriter
+import ngram
+
+def estimate_perplexity(sentences: List[List[str]], ngram_model):
+    """
+    Calculates the perplexity of a set of sentences based on an ngram model.
+
+    Args:
+        sentences (List[List[str]]): A list of tokenized sentences.
+        ngram_model (Any): The ngram model to use for calculating perplexity.
+
+    Returns:
+        float: The perplexity of the sentences.
+    """
+    padded_sentences = ngram.prepare_tokenized_sentences(sentences, ngram_model.n)
+    mean_perplexity = np.mean([ngram_model.perplexity(sentence) for sentence in padded_sentences])
+    return mean_perplexity
+    
 
 def gumbel_softmax(logits, temperature: int, hard: bool=False):
     """
@@ -112,7 +129,7 @@ class Discriminator(nn.Module):
         
         return torch.sigmoid(out)
     
-def train(generator, discriminator, training_sentences, validation_sentences, word2vec_manager, seq_length, generator_input_features, generator_lr: float = 0.001, discriminator_lr: float = 0.001, num_epochs=2, batch_size=4, temperature=1.0, temp_decay_rate: float = 0.001, gumbel_hard: bool = False, encoding_method="one_hot", noise_sample_method: Literal['uniform', 'normal'] = 'uniform', device: str = 'cpu', tensorboard_log_dir: str = 'runs'): 
+def train(generator, discriminator, training_sentences, validation_sentences, word2vec_manager, calc_perplexity: Callable, seq_length, generator_input_features, generator_lr: float = 0.001, discriminator_lr: float = 0.001, num_epochs=2, batch_size=4, temperature=1.0, temp_decay_rate: float = 0.001, gumbel_hard: bool = False, encoding_method="one_hot", noise_sample_method: Literal['uniform', 'normal'] = 'uniform', device: str = 'cpu', tensorboard_log_dir: str = 'runs'): 
     """
     Trains a Generative Adversarial Network (GAN) consisting of a generator and discriminator.
 
@@ -122,6 +139,7 @@ def train(generator, discriminator, training_sentences, validation_sentences, wo
         training_sentences (List[List[str]]): Tokenized sentences for the dataset.
         validation_sentences (List[List[str]]): Tokenized sentences for the validation dataset.
         word2vec_manager (Any): Embedding manager to handle word embeddings.
+        calc_perplexity (Callable): Function to calculate perplexity of the generator.
         seq_length (int): Sequence length for the sentences.
         generator_input_features (int): Input dimension (number of features) for the generator.
         generator_lr (float, optional): Learning rate for the generator optimizer. Default is 0.001.
@@ -177,33 +195,31 @@ def train(generator, discriminator, training_sentences, validation_sentences, wo
             batch_size = real_data.size(0)
             real_data = real_data.to(device)
 
-            # only train discriminator every 2 batches
-            if batch_idx % 2 == 0:
-                # Generate fake data
-                noise = generate_noise((batch_size, seq_length, generator_input_features), noise_sample_method).to(device)
-                generated_data = generator(noise, temperature, hard=gumbel_hard)
+            # Generate fake data
+            noise = generate_noise((batch_size, seq_length, generator_input_features), noise_sample_method).to(device)
+            generated_data = generator(noise, temperature, hard=gumbel_hard)
 
-                optimizer_D.zero_grad()
-                real_labels = torch.ones(batch_size, 1)
-                predictions_on_real_data = discriminator(real_data)
-                real_loss = loss(predictions_on_real_data, real_labels)
-                fake_labels = torch.zeros(batch_size, 1)
-                fake_preds = discriminator(generated_data.detach())
-                fake_loss = loss(fake_preds, fake_labels)
-                d_loss = real_loss + fake_loss
-                
-                # Metrics (accuracy, precision, recall, f1, loss)
-                accuracy, precision, recall, f1 = get_discriminator_metrics(predictions_on_real_data, fake_preds) 
+            optimizer_D.zero_grad()
+            real_labels = torch.ones(batch_size, 1)
+            predictions_on_real_data = discriminator(real_data)
+            real_loss = loss(predictions_on_real_data, real_labels)
+            fake_labels = torch.zeros(batch_size, 1)
+            fake_preds = discriminator(generated_data.detach())
+            fake_loss = loss(fake_preds, fake_labels)
+            d_loss = real_loss + fake_loss
+            
+            # Metrics (accuracy, precision, recall, f1, loss)
+            accuracy, precision, recall, f1 = get_discriminator_metrics(predictions_on_real_data, fake_preds) 
 
-                writer.add_scalar('Discriminator Accuracy / Train', accuracy, batch_idx)
-                writer.add_scalar('Discriminator Precision / Train', precision, batch_idx)
-                writer.add_scalar('Discriminator Recall / Train', recall, batch_idx)
-                writer.add_scalar('Discriminator F1 / Train', f1, batch_idx)
-                writer.add_scalar('Discriminator Loss / Train', d_loss, batch_idx)
-                
-                # Backpropagate and update weights
-                d_loss.backward()
-                optimizer_D.step()
+            writer.add_scalar('Discriminator Accuracy / Train', accuracy, batch_idx)
+            writer.add_scalar('Discriminator Precision / Train', precision, batch_idx)
+            writer.add_scalar('Discriminator Recall / Train', recall, batch_idx)
+            writer.add_scalar('Discriminator F1 / Train', f1, batch_idx)
+            writer.add_scalar('Discriminator Loss / Train', d_loss, batch_idx)
+            
+            # Backpropagate and update weights
+            d_loss.backward()
+            optimizer_D.step()
 
             # Train generator
             optimizer_G.zero_grad()
@@ -225,6 +241,8 @@ def train(generator, discriminator, training_sentences, validation_sentences, wo
             writer.add_scalar('Generator Trick Accuracy / Train', gen_trick_accuracy, batch_idx)
 
             if batch_idx % 10 == 0:
+                # TODO: I don't really care about discriminator metrics on the validation set, but I do care about sentence BLEU score
+                # We should see how accurate the discriminator was on current batch of validation versus generated data (accuracy, precision, recall, f1, loss)
                 # Calculate sentence BLEU score
                 generated_sentences = turn_generator_output_to_text(generated_data, word2vec_manager)
                 sentence_bleu_scores =[sentence_bleu(validation_sentences, generated_sentence, smoothing_function=bleu_smoothing) for generated_sentence in generated_sentences]
