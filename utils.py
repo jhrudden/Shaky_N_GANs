@@ -57,12 +57,14 @@ def load_sentences(data_path: str) -> List[str]:
         sentences = f.readlines()
     return sentences
 
-def process_training_data(file_path: str, min_sentence_length = 1) -> List[List[str]]:
+def process_data(file_path: str, min_sentence_length = 1, add_unks: bool = True) -> List[List[str]]:
     """
-    Processes the training data by tokenizing sentences and replacing infrequent words with "<UNK>".
+    Processes the data by tokenizing sentences and replacing infrequent words with "<UNK>" if applicable.
 
     Args:
     file_path (str): The path to the file containing the training data.
+    min_sentence_length (int): The minimum length of a sentence to include in the training data. Defaults to 1.
+    add_unks (bool): Whether or not to replace infrequent words with "<UNK>". Defaults to True.
     
     Returns:
     List[List[str]]: A list of tokenized sentences with infrequent words replaced by "<UNK>".
@@ -73,13 +75,17 @@ def process_training_data(file_path: str, min_sentence_length = 1) -> List[List[
     tokenized_sentences = [sentence for sentence in tokenized_sentences if len(sentence) >= min_sentence_length]
 
     # Count word occurrences
-    word_counts = Counter(word for sentence in tokenized_sentences for word in sentence)
+    word_counts = None
+    if add_unks:
+        word_counts = Counter(word for sentence in tokenized_sentences for word in sentence)
 
-    # Replace rare words with UNK
-    processed_sentences = []
-    for sentence in tokenized_sentences:
-        processed_sentence = [word if word_counts[word] >= ngram.UNKNOWN_THRESHOLD else ngram.UNK for word in sentence]
-        processed_sentences.append(processed_sentence)
+    processed_sentences = tokenize_sentences
+    if add_unks:
+        # Replace rare words with UNK
+        processed_sentences = []
+        for sentence in tokenized_sentences:
+            processed_sentence = [word if word_counts[word] >= ngram.UNKNOWN_THRESHOLD else ngram.UNK for word in sentence]
+            processed_sentences.append(processed_sentence)
 
     return processed_sentences
 
