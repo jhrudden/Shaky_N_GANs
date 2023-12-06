@@ -11,6 +11,34 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from torch.utils.tensorboard import SummaryWriter
 import ngram
 
+def load_gen_model(model_path: str, gen_input_dim: int, gen_hidden_dim: int, gen_output_dim: int, seq_length: int):
+    """
+    Loads a model from a file.
+
+    Args:
+        model_path (str): The path to the model file.
+        gen_input_dim (int): The input dimension (number of features) for the generator.
+        gen_hidden_dim (int): The hidden dimension for the LSTM blocks.
+        gen_output_dim (int): The output dimension (number of features) for the generator (this will be the size of our vocab for now).
+        seq_length (int): The sequence length of the generated sequences.
+
+    Returns:
+        Any: The loaded Generator model.
+    """
+    # Instantiate the model
+    gen = Generator(input_size=gen_input_dim, hidden_size=gen_hidden_dim, output_size=gen_output_dim, seq_length=seq_length)
+
+    # Load the state dictionary
+    state_dict = torch.load(model_path)
+    missing_keys, unexpected_keys = gen.load_state_dict(state_dict, strict=False)
+
+    # Check for missing or unexpected keys
+    print("Missing keys:", missing_keys)
+    print("Unexpected keys:", unexpected_keys)
+
+    return gen
+
+
 def estimate_perplexity(sentences: List[List[str]], ngram_model):
     """
     Calculates the perplexity of a set of sentences based on an ngram model.
@@ -22,7 +50,7 @@ def estimate_perplexity(sentences: List[List[str]], ngram_model):
     Returns:
         float: The perplexity of the sentences.
     """
-    padded_sentences = ngram.prepare_tokenized_sentences(sentences, ngram_model.n)
+    padded_sentences = [ngram.prepare_tokenized_sentences([sentence], ngram_model.n) for sentence in sentences]
     mean_perplexity = np.mean([ngram_model.perplexity(sentence) for sentence in padded_sentences])
     return mean_perplexity
     
@@ -129,7 +157,7 @@ class Discriminator(nn.Module):
         
         return torch.sigmoid(out)
     
-def train(generator, discriminator, training_sentences, validation_sentences, word2vec_manager, calc_perplexity: Callable, seq_length, generator_input_features, generator_lr: float = 0.001, discriminator_lr: float = 0.001, num_epochs=2, batch_size=4, temperature=1.0, temp_decay_rate: float = 0.001, gumbel_hard: bool = False, encoding_method="one_hot", noise_sample_method: Literal['uniform', 'normal'] = 'uniform', device: str = 'cpu', tensorboard_log_dir: str = 'runs'): 
+def train(generator, discriminator, training_sentences, validation_sentences, word2vec_manager, calc_perplexity: Callable, seq_length, generator_input_features, generator_lr: float = 0.001, discriminator_lr: float = 0.001, num_epochs=2, batch_size=4, temperature=1.0, temp_decay_rate: float = 0.001, gumbel_hard: bool = False, encoding_method="one_hot", noise_sample_method: Literal['uniform', 'normal'] = 'uniform', device: str = 'cpu', tensorboard_log_dir: str = 'runs', deep_discriminator_metrics: bool = False): 
     """
     Trains a Generative Adversarial Network (GAN) consisting of a generator and discriminator.
 
@@ -152,6 +180,7 @@ def train(generator, discriminator, training_sentences, validation_sentences, wo
         encoding_method (str, optional): Encoding method for the data ('word_embedding' or 'one_hot'). Default is "one_hot".
         noise_sample_method (str, optional): Method for sampling noise for the generator ('uniform' or 'normal'). Default is 'uniform'.
         tensorboard_log_dir (str, optional): Directory to log tensorboard data. Default is 'runs'.
+        deep_discriminator_metrics (bool, optional): If True, calculate additional metrics for the discriminator. Default is False.
 
     Returns:
         tuple: A tuple containing the average generator and discriminator losses for each epoch.
@@ -208,14 +237,14 @@ def train(generator, discriminator, training_sentences, validation_sentences, wo
             fake_loss = loss(fake_preds, fake_labels)
             d_loss = real_loss + fake_loss
             
-            # Metrics (accuracy, precision, recall, f1, loss)
-            accuracy, precision, recall, f1 = get_discriminator_metrics(predictions_on_real_data, fake_preds) 
-
-            writer.add_scalar('Discriminator Accuracy / Train', accuracy, batch_idx)
-            writer.add_scalar('Discriminator Precision / Train', precision, batch_idx)
-            writer.add_scalar('Discriminator Recall / Train', recall, batch_idx)
-            writer.add_scalar('Discriminator F1 / Train', f1, batch_idx)
-            writer.add_scalar('Discriminator Loss / Train', d_loss, batch_idx)
+            if deep_discriminator_metrics:
+                # Metrics (accuracy, precision, recall, f1, loss)
+                accuracy, precision, recall, f1 = get_discriminator_metrics(predictions_on_real_data, fake_preds) 
+                writer.add_scalar('Discriminator Accuracy / Train', accuracy, batch_idx)
+                writer.add_scalar('Discriminator Precision / Train', precision, batch_idx)
+                writer.add_scalar('Discriminator Recall / Train', recall, batch_idx)
+                writer.add_scalar('Discriminator F1 / Train', f1, batch_idx)
+                writer.add_scalar('Discriminator Loss / Train', d_loss, batch_idx)
             
             # Backpropagate and update weights
             d_loss.backward()
@@ -235,34 +264,43 @@ def train(generator, discriminator, training_sentences, validation_sentences, wo
             g_loss.backward()
             optimizer_G.step()
 
+            # Add metrics for both generator and discriminator loss on same graph
+            writer.add_scalars('Loss / Train', {'Generator Loss': g_loss, 'Discriminator Loss': d_loss}, batch_idx)
+
             # Generator Metrics (besides loss)
             # Want to see how well the generator is tricking the discriminator
             gen_trick_accuracy = accuracy_score(fake_labels.detach().numpy(), fake_pred.detach().numpy() > 0.5)
             writer.add_scalar('Generator Trick Accuracy / Train', gen_trick_accuracy, batch_idx)
 
+            if d_loss.item() < 0.2:
+                print('Discriminator loss is too low, stopping training')
+                break
             if batch_idx % 10 == 0:
-                # TODO: I don't really care about discriminator metrics on the validation set, but I do care about sentence BLEU score
-                # We should see how accurate the discriminator was on current batch of validation versus generated data (accuracy, precision, recall, f1, loss)
-                # Calculate sentence BLEU score
                 generated_sentences = turn_generator_output_to_text(generated_data, word2vec_manager)
                 sentence_bleu_scores =[sentence_bleu(validation_sentences, generated_sentence, smoothing_function=bleu_smoothing) for generated_sentence in generated_sentences]
                 mean_sentence_bleu_score = np.mean(sentence_bleu_scores)
+                mean_perplexity = calc_perplexity(generated_sentences)
+                writer.add_scalar('Sentence BLEU Score / Generated', mean_sentence_bleu_score, batch_idx)
+                writer.add_scalar('Mean Perplexity / Generated', mean_perplexity, batch_idx)
 
-                writer.add_scalar('Sentence BLEU Score / Train', mean_sentence_bleu_score, batch_idx)
+                if mean_perplexity < 50:
+                    print('Perplexity is too low, stopping training')
+                    break
 
-                # TODO: Calculate Validation Metrics (accuracy, precision, recall, f1, loss) for discriminator
-                # This will help us understand how well the discriminator is doing on the validation set (helps see if its overfitting)
-                val_data = next(val_dataset)
-                val_data = val_data.to(device)
-                val_preds = discriminator(val_data)
-                val_accuracy, val_precision, val_recall, val_f1 = get_discriminator_metrics(val_preds, fake_preds)
-                writer.add_scalar('Discriminator Accuracy / Validation', val_accuracy, batch_idx)
-                writer.add_scalar('Discriminator Precision / Validation', val_precision, batch_idx)
-                writer.add_scalar('Discriminator Recall / Validation', val_recall, batch_idx)
-                writer.add_scalar('Discriminator F1 / Validation', val_f1, batch_idx)
-                # loss 
-                val_loss = loss(val_preds, real_labels)
-                writer.add_scalar('Discriminator Loss / Validation', val_loss, batch_idx)
+                if deep_discriminator_metrics:
+                    # TODO: Calculate Validation Metrics (accuracy, precision, recall, f1, loss) for discriminator
+                    # This will help us understand how well the discriminator is doing on the validation set (helps see if its overfitting)
+                    val_data = next(val_dataset)
+                    val_data = val_data.to(device)
+                    val_preds = discriminator(val_data)
+                    val_accuracy, val_precision, val_recall, val_f1 = get_discriminator_metrics(val_preds, fake_preds)
+                    writer.add_scalar('Discriminator Accuracy / Validation', val_accuracy, batch_idx)
+                    writer.add_scalar('Discriminator Precision / Validation', val_precision, batch_idx)
+                    writer.add_scalar('Discriminator Recall / Validation', val_recall, batch_idx)
+                    writer.add_scalar('Discriminator F1 / Validation', val_f1, batch_idx)
+                    # loss 
+                    val_loss = loss(val_preds, real_labels)
+                    writer.add_scalar('Discriminator Loss / Validation', val_loss, batch_idx)
 
 
             g_loss_total += g_loss.item()
