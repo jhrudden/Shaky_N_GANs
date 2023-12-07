@@ -7,7 +7,7 @@ import os
 from collections import Counter
 
 import ngram
-from embeddings import WordEmbeddingManager
+from encoding import EncodingManager
 
 nltk.download('punkt')
 
@@ -89,15 +89,14 @@ def process_data(file_path: str, min_sentence_length = 1, add_unks: bool = True)
 
     return processed_sentences
 
-def process_non_training_data(file_path: str, word_embedding_manager: WordEmbeddingManager) -> List[List[str]]:
+def process_non_training_data(file_path: str, word_encoding_manager: EncodingManager) -> List[List[str]]:
     """
     Processes non-training data (such as validation or test data) by tokenizing sentences and 
-    replacing words not in the trained Word2Vec model's vocabulary with "<UNK>".
+    replacing words not in the Encoding Manager's vocabulary with "<UNK>".
 
     Args:
     file_path (str): The path to the file containing the non-training data.
-    word_embedding_manager (WordEmbeddingManager): An instance of WordEmbeddingManager containing 
-    the trained Word2Vec model.
+    word_encoding_manager (EncodingManager): An instance of EncodingManager containing the vocabulary.
 
     Returns:
     List[List[str]]: A list of tokenized sentences with words not in the model's vocabulary replaced by "<UNK>".
@@ -105,8 +104,7 @@ def process_non_training_data(file_path: str, word_embedding_manager: WordEmbedd
     sentences = load_sentences(file_path)
     tokenized_sentences = tokenize_sentences(sentences)
 
-    # Retrieve the vocabulary from the Word2Vec model
-    trained_vocab = set(word_embedding_manager._model.wv.key_to_index.keys())
+    trained_vocab = set(word_encoding_manager.word_to_index.keys())
 
     # Process sentences
     processed_sentences = []

@@ -4,7 +4,7 @@ from torch import nn
 from torch.nn import functional as F
 import torch.optim as optim
 from tqdm import tqdm
-from embeddings import create_embedding_dataloader
+from encoding import create_encoding_dataloader
 import numpy as np
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
@@ -122,9 +122,9 @@ class Generator(nn.Module):
 
 class Discriminator(nn.Module):
     """
-    Discriminator component of the GAN. Takes in a sequence of word embeddings and outputs a probability that the sequence is real.
-    Embeddings are currently assumed to be of shape [batch_size, seq_length, input_dim] where input_dim is the dimension of the word embeddings.
-    Word embeddings are currently represent as a one-hot vector or an approximation of a one-hot vector.
+    Discriminator component of the GAN. Takes in a sequence of word one hot encodings and outputs a probability that the sequence is real.
+    One hot encodings are currently assumed to be of shape [batch_size, seq_length, input_dim] where input_dim is the dimension of the word encodings.
+    Word encodings are currently represent as a one-hot vector or an approximation of a one-hot vector.
 
     Attributes:
         input_dim (int): The input dimension (number of features) for the discriminator.
@@ -142,10 +142,10 @@ class Discriminator(nn.Module):
 
     def forward(self, x):
         """
-        A forward pass through the discriminator. Takes in a sequence of word embeddings and outputs a probability that the sequence is real.
+        A forward pass through the discriminator. Takes in a sequence of one hot word encodings and outputs a probability that the sequence is real.
 
         Args:
-            x (torch.Tensor): The input sequence of word embeddings. Should be of shape [batch_size, seq_length, input_dim].
+            x (torch.Tensor): The input sequence of word encodings. Should be of shape [batch_size, seq_length, input_dim].
 
         Returns:
             torch.Tensor: A tensor of shape [batch_size, 1] containing the probabilities that the sequences are real.
@@ -157,7 +157,7 @@ class Discriminator(nn.Module):
         
         return torch.sigmoid(out)
     
-def train(generator, discriminator, training_sentences, validation_sentences, word2vec_manager, calc_perplexity: Callable, seq_length, generator_input_features, generator_lr: float = 0.001, discriminator_lr: float = 0.001, num_epochs=2, batch_size=4, temperature=1.0, temp_decay_rate: float = 0.001, gumbel_hard: bool = False, encoding_method="one_hot", noise_sample_method: Literal['uniform', 'normal'] = 'uniform', device: str = 'cpu', tensorboard_log_dir: str = 'runs', deep_discriminator_metrics: bool = False): 
+def train(generator, discriminator, training_sentences, validation_sentences, word_encoding_manager, calc_perplexity: Callable, seq_length, generator_input_features, generator_lr: float = 0.001, discriminator_lr: float = 0.001, num_epochs=2, batch_size=4, temperature=1.0, temp_decay_rate: float = 0.001, gumbel_hard: bool = False, noise_sample_method: Literal['uniform', 'normal'] = 'uniform', device: str = 'cpu', tensorboard_log_dir: str = 'runs', deep_discriminator_metrics: bool = False): 
     """
     Trains a Generative Adversarial Network (GAN) consisting of a generator and discriminator.
 
@@ -166,7 +166,7 @@ def train(generator, discriminator, training_sentences, validation_sentences, wo
         discriminator (torch.nn.Module): The discriminator model.
         training_sentences (List[List[str]]): Tokenized sentences for the dataset.
         validation_sentences (List[List[str]]): Tokenized sentences for the validation dataset.
-        word2vec_manager (Any): Embedding manager to handle word embeddings.
+        word_encoding_manager (Any): Encoding manager to handle word one hot encoding process.
         calc_perplexity (Callable): Function to calculate perplexity of the generator.
         seq_length (int): Sequence length for the sentences.
         generator_input_features (int): Input dimension (number of features) for the generator.
@@ -177,7 +177,6 @@ def train(generator, discriminator, training_sentences, validation_sentences, wo
         temperature (float, optional): Temperature parameter used in gumbel softmax equation. Default is 1.0.
         temp_decay_rate (float, optional): Rate at which the temperature parameter decays. Default is 0.001.
         gumbel_hard (bool, optional): If True, the output of the gumbel softmax function will be one-hot encoded. Default is False.
-        encoding_method (str, optional): Encoding method for the data ('word_embedding' or 'one_hot'). Default is "one_hot".
         noise_sample_method (str, optional): Method for sampling noise for the generator ('uniform' or 'normal'). Default is 'uniform'.
         tensorboard_log_dir (str, optional): Directory to log tensorboard data. Default is 'runs'.
         deep_discriminator_metrics (bool, optional): If True, calculate additional metrics for the discriminator. Default is False.
@@ -186,7 +185,6 @@ def train(generator, discriminator, training_sentences, validation_sentences, wo
         tuple: A tuple containing the average generator and discriminator losses for each epoch.
     """
     assert noise_sample_method in ['uniform', 'normal'], f'Invalid noise sample method: {noise_sample_method}'
-    assert encoding_method in ['word_embedding', 'one_hot'], f'Invalid encoding method: {encoding_method}'
 
     writer = SummaryWriter(tensorboard_log_dir)
 
@@ -201,8 +199,8 @@ def train(generator, discriminator, training_sentences, validation_sentences, wo
     loss = torch.nn.BCELoss()
 
     # Create data loader
-    dataloader = create_embedding_dataloader(training_sentences, word2vec_manager, seq_length, batch_size, encoding_method, verbose=False)
-    val_dataloader = create_embedding_dataloader(validation_sentences, word2vec_manager, seq_length, batch_size, encoding_method, verbose=False)
+    dataloader = create_encoding_dataloader(training_sentences, word_encoding_manager, seq_length, batch_size, verbose=False)
+    val_dataloader = create_encoding_dataloader(validation_sentences, word_encoding_manager, seq_length, batch_size, verbose=False)
     avg_g_loss = 0
     avg_d_loss = 0
 
@@ -275,8 +273,10 @@ def train(generator, discriminator, training_sentences, validation_sentences, wo
             if d_loss.item() < 0.2:
                 print('Discriminator loss is too low, stopping training')
                 break
-            if batch_idx % 10 == 0:
-                generated_sentences = turn_generator_output_to_text(generated_data, word2vec_manager)
+            
+            # Validation Metrics (BLEU Score, Perplexity, Discriminator Metrics) only every 10 batches
+            if batch_idx % 10 == 1:
+                generated_sentences = turn_generator_output_to_text(generated_data, word_encoding_manager)
                 sentence_bleu_scores =[sentence_bleu(validation_sentences, generated_sentence, smoothing_function=bleu_smoothing) for generated_sentence in generated_sentences]
                 mean_sentence_bleu_score = np.mean(sentence_bleu_scores)
                 mean_perplexity = calc_perplexity(generated_sentences)
@@ -371,19 +371,19 @@ def get_discriminator_metrics(real_data_predictions: torch.Tensor, generated_dat
     f1 = f1_score(labels, predictions)
     return accuracy, percision, recall, f1
 
-def turn_generator_output_to_text(gen_out: torch.Tensor, word2vec_manager: Any):
+def turn_generator_output_to_text(gen_out: torch.Tensor, word_encoding_manager: Any):
     """
     Turns the generator output into text.
 
     Args:
         gen_out (torch.Tensor): The generator output. Should be of shape [batch_size, seq_length, output_size].
-        word2vec_manager (Any): Embedding manager to handle word embeddings.
+        word_encoding_manager (Any): Encoding manager to handle word one hot encoding process.
 
     Returns:
         List[str]: A list of strings containing the generated text.
     """
     # need to argmax final dimension of gen_out
-    # then use word2vec_manager to turn the indices into words
+    # then use word_encoding_manager to turn the indices into words
     # then return the list of words
     batch_size, seq_length, output_size = gen_out.shape
     gen_out = gen_out.argmax(dim=2)
@@ -391,6 +391,6 @@ def turn_generator_output_to_text(gen_out: torch.Tensor, word2vec_manager: Any):
     for i in range(batch_size):
         sentence = []
         for index in gen_out[i]:
-            sentence.append(word2vec_manager.index_to_word(index))
+            sentence.append(word_encoding_manager.index_to_word(index))
         results.append(sentence)
     return results
