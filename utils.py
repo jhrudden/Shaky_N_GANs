@@ -79,7 +79,7 @@ def process_data(file_path: str, min_sentence_length = 1, add_unks: bool = True)
     if add_unks:
         word_counts = Counter(word for sentence in tokenized_sentences for word in sentence)
 
-    processed_sentences = tokenize_sentences
+    processed_sentences = tokenized_sentences
     if add_unks:
         # Replace rare words with UNK
         processed_sentences = []

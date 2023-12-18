@@ -157,7 +157,7 @@ class Discriminator(nn.Module):
         
         return torch.sigmoid(out)
     
-def train(generator, discriminator, training_sentences, validation_sentences, word_encoding_manager, calc_perplexity: Callable, seq_length, generator_input_features, generator_lr: float = 0.001, discriminator_lr: float = 0.001, num_epochs=2, batch_size=4, temperature=1.0, temp_decay_rate: float = 0.001, gumbel_hard: bool = False, noise_sample_method: Literal['uniform', 'normal'] = 'uniform', device: str = 'cpu', tensorboard_log_dir: str = 'runs', deep_discriminator_metrics: bool = False): 
+def train(generator, discriminator, training_sentences, validation_sentences, word_encoding_manager, calc_perplexity: Callable, seq_length, generator_input_features, generator_lr: float = 0.001, discriminator_lr: float = 0.001, num_epochs=2, batch_size=4, temperature=1.0, temp_decay_rate: float = 0.001, gumbel_hard: bool = False, noise_sample_method: Literal['uniform', 'normal'] = 'uniform', device: str = 'cpu', by_char:bool=False, tensorboard_log_dir: str = 'runs', deep_discriminator_metrics: bool = False): 
     """
     Trains a Generative Adversarial Network (GAN) consisting of a generator and discriminator.
 
@@ -178,6 +178,8 @@ def train(generator, discriminator, training_sentences, validation_sentences, wo
         temp_decay_rate (float, optional): Rate at which the temperature parameter decays. Default is 0.001.
         gumbel_hard (bool, optional): If True, the output of the gumbel softmax function will be one-hot encoded. Default is False.
         noise_sample_method (str, optional): Method for sampling noise for the generator ('uniform' or 'normal'). Default is 'uniform'.
+        device (str, optional): Device to use for training. Default is 'cpu'.
+        by_char (bool, optional): Whether or not to encode by character. Default is False.
         tensorboard_log_dir (str, optional): Directory to log tensorboard data. Default is 'runs'.
         deep_discriminator_metrics (bool, optional): If True, calculate additional metrics for the discriminator. Default is False.
 
@@ -199,8 +201,8 @@ def train(generator, discriminator, training_sentences, validation_sentences, wo
     loss = torch.nn.BCELoss()
 
     # Create data loader
-    dataloader = create_encoding_dataloader(training_sentences, word_encoding_manager, seq_length, batch_size, verbose=False)
-    val_dataloader = create_encoding_dataloader(validation_sentences, word_encoding_manager, seq_length, batch_size, verbose=False)
+    dataloader = create_encoding_dataloader(training_sentences, word_encoding_manager, seq_length, batch_size, by_char=by_char, verbose=False)
+    val_dataloader = create_encoding_dataloader(validation_sentences, word_encoding_manager, seq_length, batch_size, by_char=by_char, verbose=False)
     avg_g_loss = 0
     avg_d_loss = 0
 

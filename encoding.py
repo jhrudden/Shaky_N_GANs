@@ -86,7 +86,7 @@ class EncodingManager:
             vector_index = self.word_to_index[word] + 1  # +1 to accommodate padding token offset
             return torch.nn.functional.one_hot(torch.tensor(vector_index), num_classes=len(self.word_to_index) + 1).float()
         else:
-            raise ValueError("Word not in vocabulary.")
+            raise ValueError(f"Word not in vocabulary: {word}")
 
     def decode_one_hot(self, one_hot_vector: torch.Tensor) -> str:
         """
@@ -152,14 +152,16 @@ class SentenceEncodingDataset(Dataset):
     Attributes:
         sentences (List[List[str]]): A list of tokenized sentences.
         encoding_manager (Any): An encoding manager instance with a method 'one_hot_encode'.
-        max_sequence_length (int): The maximum length of a sequence.
+        sequence_length (int): The maximum sequence length of sentences.
+        by_char (bool): Whether or not to encode by character.
         verbose (bool): Whether or not to print debug information.
 
     """
-    def __init__(self, sentences: list, encoding_manager: EncodingManager, sequence_length: int, verbose: bool=False):
+    def __init__(self, sentences: list, encoding_manager: EncodingManager, sequence_length: int, by_char: bool = False, verbose: bool=False):
         self.sentences = sentences
         self.encoding_manager = encoding_manager
         self.sequence_length = sequence_length
+        self.by_char = by_char
         self.verbose = verbose
     
     def __len__(self):
@@ -177,15 +179,17 @@ class SentenceEncodingDataset(Dataset):
             torch.Tensor: A tensor of one hot encodings for the sentence.
         """
         sentence = self.sentences[idx]
+        if self.by_char:
+            sentence = list(' '.join(sentence))
         sentence = sentence[:self.sequence_length] + [PAD_TOKEN] * (self.sequence_length - len(sentence))
         if self.verbose:
-            print(f'Encoding sentence: {sentence}, with encoding method: {self.encoding_method}')
+            print(f'Encoding sentence: {sentence}')
         # get one hot encodings for each word in the sentence
         one_hot_encodings = [self.encoding_manager.one_hot_encode(word) for word in sentence]
         # stack the one hot encodings into a tensor
         return torch.stack(one_hot_encodings, dim=0)
     
-def create_encoding_dataloader(sentences: List[List[str]], encoding_manager: Any, seq_length: int, batch_size: int, verbose: bool=False) -> DataLoader:
+def create_encoding_dataloader(sentences: List[List[str]], encoding_manager: Any, seq_length: int, batch_size: int, by_char: bool=False, verbose: bool=False) -> DataLoader:
     """
     Creates a DataLoader for sentences with one hot encodings.
 
@@ -194,11 +198,12 @@ def create_encoding_dataloader(sentences: List[List[str]], encoding_manager: Any
         encoding_manager (Any): An instance of the encoding manager to retrieve word encodings.
         seq_length (int): The maximum sequence length of sentences.
         batch_size (int): The number of items per batch.
+        by_char (bool, optional): Whether or not to encode by character. Defaults to False.
         verbose (bool, optional): Whether or not to print debug information. Defaults to False.
 
     Returns:
         DataLoader: A PyTorch DataLoader object ready to be used in a training or evaluation loop.
     """
-    dataset = SentenceEncodingDataset(sentences, encoding_manager, seq_length, verbose=verbose)
+    dataset = SentenceEncodingDataset(sentences, encoding_manager, seq_length, verbose=verbose, by_char=by_char)
     return DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
