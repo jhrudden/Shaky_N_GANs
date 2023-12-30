@@ -78,6 +78,7 @@ To help gauge the improvements of a NGRAM using Linear Interpolation over Laplac
 #### Affects of NGRAM Size on Perplexity:
 
 ![[./figs/laplace_perplexity_sizes.png|400]]
+
 ![[./figs/li_perplexity_sizes.png|400]]
 
 Moreover, we see that Linear Interpolation seems perform better in all cases. Also it seems to generally be the case that more complex NGRAMs perform better on the perplexity metric. Not the same for Laplace.
@@ -85,7 +86,9 @@ Moreover, we see that Linear Interpolation seems perform better in all cases. Al
 ### Results From Varying Train Proportion:
 
 ![[./figs/laplace_perplexity_train_size.png|400]]
+
 ![[./figs/li_perplexity_train_size.png|400]]
+
 ![[./figs/li_vs_laplace_perplexity_train_size.png|400]]
 
 The above results seem to show what was originally mentioned about high weighting of unknown probabilities for Laplace smoothing. A larger train set means larger vocabulary, which Laplace doesn't seem to deal well with. On the other hand, the LI model seems to stay in the same ballpark when it comes to perplexity changes based on train set size, which is an interesting and good sign.
@@ -129,15 +132,11 @@ In a typical GAN, the Discriminator is a binary classifier aiming to label real 
 
 ##### Discriminator Objective
 
-$$
-\text{D\_Loss} = -\frac{1}{n}\sum_i^n y_ilog(D(x_i)) + (1-y_i)log(1-D(G(z_i)))
-$$
+$$\text{D\_Loss} = -\frac{1}{n}\sum_i^n y_ilog(D(x_i)) + (1-y_i)log(1-D(G(z_i)))$$
 
 ##### Generator Objective
 
-$$
-\text{G\_Loss} = \frac{1}{n}\sum_i^n y_ilog(D(G(z_i)))
-$$
+$$\text{G\_Loss} = \frac{1}{n}\sum_i^n y_ilog(D(G(z_i)))$$
 
 ### Data Representation in GANs for Text Generation
 
