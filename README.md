@@ -1,6 +1,6 @@
 ### General Idea:
 
-I was inspired by Andre Karpothy’s series for building A GPT model to generate Shakespeare lines. Since we were already covering the makeup of transformers, I thought it would be interesting to investigate a different model. Recently, I have been hearing a ton about GANs and the general idea of this approach (which I will talk about later) seemed super interesting. So, for this project I decided to build a GAN for sequence generation. As a baseline to compare outputs generated from my GAN to outputs from a generative model that we have seen, I decided to also train a NGRAM model which uses linear interpolation to improve the probability of output sequences, thus, NGRAM should output some quality sequences that can benchmark my GANs outputs.
+I was inspired by Andre Karpothy’s series for building A GPT model to generate Shakespeare lines. Since I have seen a ton of content covering makeup of transformers, I thought it would be interesting to investigate a different model. Recently, I have been hearing a ton about GANs and the general idea of this approach (which I will talk about later) seemed super interesting. So, for this project I decided to build a GAN for sequence generation. As a baseline to compare outputs generated from my GAN to outputs from a generative model that we have seen, I decided to also train a NGRAM model which uses linear interpolation to improve the probability of output sequences, thus, NGRAM should output some quality sequences that can benchmark my GANs outputs.
 
 ### It’s all about the Data:
 
@@ -55,7 +55,7 @@ $$
 
 Where $|V|$ is the size of the vocabulary of training corpus. By looking at this equation you can see that unseen NGRAMs are given a fairly high probability.
 
-For this reason I used a different method to smooth my NGRAM probabilities _Linear Interpolation_. More complex smoothing techniques exist (See: (Kneser-Ney Smoothing)[https://en.wikipedia.org/wiki/Kneser%E2%80%93Ney_smoothing]), however, linear interpolation is fairly simple and effective.
+For this reason I used a different method to smooth my NGRAM probabilities _Linear Interpolation_. More complex smoothing techniques exist (See: [Kneser-Ney Smoothing](https://en.wikipedia.org/wiki/Kneser%E2%80%93Ney_smoothing)), however, linear interpolation is fairly simple and effective.
 
 Linear interpolation works by calculating a probability of a given NGRAM by calculating a weighted sum of probabilities of its sub grams. This follows the formula (for trigram):
 
