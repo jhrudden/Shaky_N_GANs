@@ -55,7 +55,7 @@ $$
 
 Where $|V|$ is the size of the vocabulary of training corpus. By looking at this equation you can see that unseen NGRAMs are given a fairly high probability.
 
-For this reason (and cause Felix said I couldn't use Laplace smoothing) I used a different method to smooth my NGRAM probabilities _Linear Interpolation_.
+For this reason I used a different method to smooth my NGRAM probabilities _Linear Interpolation_. More complex smoothing techniques exist (See: (Kneser-Ney Smoothing)[https://en.wikipedia.org/wiki/Kneser%E2%80%93Ney_smoothing]), however, linear interpolation is fairly simple and effective.
 
 Linear interpolation works by calculating a probability of a given NGRAM by calculating a weighted sum of probabilities of its sub grams. This follows the formula (for trigram):
 
@@ -90,7 +90,6 @@ Moreover, we see that Linear Interpolation seems perform better in all cases. Al
 ![li_perplexity_train_size](https://github.com/jhrudden/Shaky_N_GANs/assets/46122209/56f2ce0e-df2b-40c3-8d34-6a3ddae304af|400)
 
 ![li_vs_laplace_perplexity_train_size](https://github.com/jhrudden/Shaky_N_GANs/assets/46122209/8e35d7c9-d2bf-4de9-a611-fc0f8e3c434e|400)
-
 
 The above results seem to show what was originally mentioned about high weighting of unknown probabilities for Laplace smoothing. A larger train set means larger vocabulary, which Laplace doesn't seem to deal well with. On the other hand, the LI model seems to stay in the same ballpark when it comes to perplexity changes based on train set size, which is an interesting and good sign.
 
@@ -201,7 +200,6 @@ As evident from the plot, a significant portion of the training data sequences a
 ![gan_loss_plot](https://github.com/jhrudden/Shaky_N_GANs/assets/46122209/aa694816-9d1d-4092-b9bd-685186f32fa2|400)
 
 ![gan_perplexity_plot1](https://github.com/jhrudden/Shaky_N_GANs/assets/46122209/6d528bbc-b3a3-4764-9549-e22246452b9c|400)
-
 
 The above plot illustrates the loss of both the Generator and Discriminator over the course of training in my most successful hyperparameter tuning session. A constant competition is observable between the two components, which is a positive sign. However, towards the end, the Generator's loss starts to diverge, suggesting that the Discriminator may have become overly proficient.
 
