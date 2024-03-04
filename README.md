@@ -1,6 +1,6 @@
 ### General Idea:
 
-I was inspired by Andre Karpothy’s series for building A GPT model to generate Shakespeare lines. Since I have seen a ton of content covering makeup of transformers, I thought it would be interesting to investigate a different model. Recently, I have been hearing a ton about GANs and the general idea of this approach (which I will talk about later) seemed super interesting. So, for this project I decided to build a GAN for sequence generation. As a baseline to compare outputs generated from my GAN to outputs from a generative model that we have seen, I decided to also train a NGRAM model which uses linear interpolation to improve the probability of output sequences, thus, NGRAM should output some quality sequences that can benchmark my GANs outputs.
+I was inspired by Andre Karpathy’s series for building A GPT model to generate Shakespeare lines. Since I have seen a ton of content covering makeup of transformers, I thought it would be interesting to investigate a different model. Recently, I have been hearing a ton about GANs and the general idea of this approach (which I will talk about later) seemed super interesting. So, for this project I decided to build a GAN for sequence generation. As a baseline to compare outputs generated from my GAN to outputs from a generative model that we have seen, I decided to also train a NGRAM model which uses linear interpolation to improve the probability of output sequences, thus, NGRAM should output some quality sequences that can benchmark my GANs outputs.
 
 ### It’s all about the Data:
 
